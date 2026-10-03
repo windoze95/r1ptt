@@ -63,6 +63,13 @@ This gives the kernel, vendor and system a known starting point. Use either rout
 - **Preferred:** Rabbit's flash tool → **Flash Stock ROM**.
 - **Command line:** with the R1 in fastboot, run `tools/flash-baseline.sh firmware/stock`.
 
+Use Rabbit's tool if the R1 has taken OTA updates. Check with
+`fastboot getvar version-bootloader`: if the date is newer than May 2025, the R1 is ahead of
+v0.8.293. (One R1 checked on 2026-10-03 reported `k65v1_64_bsp-…-20250905…`.) Rabbit's tool writes
+the full matching v0.8.293 set, including the power-management and modem firmware. The script
+deliberately leaves the bootloader chain alone, so on an updated R1 it would pair newer firmware
+with the older kernel.
+
 Let it boot into rabbitOS once to confirm the base works, then power it off.
 
 ## 3. LineageOS GSI

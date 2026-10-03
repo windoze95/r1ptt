@@ -7,6 +7,8 @@
 # stay on the command line. Either way, boot once into rabbitOS to confirm the base works.
 #
 # Never touched: preloader, lk, nvram/nvdata/nvcfg, protect*, proinfo, seccfg, frp, md1img.
+# So on an R1 that has taken OTAs (`fastboot getvar version-bootloader` dated after May 2025), this
+# leaves newer bootloader/power firmware next to the v0.8.293 kernel; Rabbit's tool avoids that.
 #
 # Usage: tools/flash-baseline.sh <folder with the extracted rabbit_OS_v0.8.293.zip>
 #        (R1 in fastboot mode, bootloader unlocked)

@@ -29,7 +29,7 @@ def preloader_port():
 def main() -> int:
     mode = (sys.argv[1] if len(sys.argv) > 1 else "FASTBOOT").encode()
     print("Waiting for the R1's preloader. Plug in the powered-off R1 now (Ctrl-C to quit).")
-    deadline = time.time() + 180
+    deadline = time.time() + 600  # time enough to power off and replug
     while time.time() < deadline:
         port = preloader_port()
         if port:
