@@ -37,16 +37,22 @@ rejected, change `providers.openai.model`.
 
 ## 1. Developer mode and bootloader unlock (Rabbit's official route)
 
-1. In rabbithole (OS3), go to **settings → r1**. Type the warranty acknowledgment, enter the R1's
-   IMEI (on the R1: settings → about) and request developer mode. Approval takes 1–2 days.
-2. Once approved, with the R1 on and online, go to **settings → r1 → device modification** and
-   choose **unlock**.
+1. In OS3, go to **settings → r1**. Developer mode only appears once the R1 is linked to your
+   account. Type the warranty acknowledgment, enter the R1's IMEI (on the R1: settings → about), and
+   click **void warranty and enable developer mode**. Each R1 needs its own request.
+2. With the R1 on and online, go to **settings → r1 → device modification** and choose **unlock**.
+   This isn't an OTA: Rabbit's servers only switch on the R1's permission to be unlocked. Nothing is
+   unlocked yet.
 3. Enter fastboot mode with the R1 powered off. You can use either route:
    - **Chrome:** open https://rabbit-hmi-oss.github.io/flashing/ and click "Enter Fastboot Mode".
      Plug the R1 in, and select "MT65xx Preloader" within about 1.5 seconds.
    - **Terminal:** run `uv run --with pyserial tools/fastboot-entry.py`, then plug the R1 in.
-4. Run `fastboot flashing unlock`. If the R1 asks for confirmation, confirm with the side button.
-5. `fastboot getvar unlocked` should now say `yes`.
+4. Check that the permission arrived: `fastboot flashing get_unlock_ability` should print `1`.
+   - If it prints `0`, reboot the R1 (`fastboot reboot`), let it sit online for a minute, and repeat
+     step 2.
+5. Run `fastboot flashing unlock`. **This wipes the R1.** If it asks for confirmation, confirm with
+   the side button.
+6. `fastboot getvar unlocked` should now say `yes`.
 
 Optional, but cheap insurance: back up the partitions that hold the IMEI and radio calibration.
 Nothing in this guide writes to them, but MediaTek devices are notorious for losing them.
