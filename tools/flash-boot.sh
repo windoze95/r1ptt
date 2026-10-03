@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Flashes a Magisk-patched copy of the stock boot.img to both slots, which roots the R1.
+# Flashes a Magisk-patched boot image to the active slot, which roots the R1 (tools/root.sh makes one).
 #
-# Make the patched image on the R1: install Magisk (adb install Magisk.apk), push the stock boot.img
-# (adb push boot.img /sdcard/Download/), then Magisk → Install → "Select and Patch a File".
-# Pull it back with: adb pull /sdcard/Download/magisk_patched-XXXXX.img out/
+# tools/root.sh makes the patched image from the R1's own boot partition and calls this. By hand: in the
+# Magisk app, Install → "Select and Patch a File", then adb pull /sdcard/Download/magisk_patched-*.img.
 #
 # Usage: tools/flash-boot.sh <magisk_patched-*.img>     (R1 booted with USB debugging, or in fastboot)
 set -euo pipefail
@@ -24,6 +23,9 @@ if in_fastbootd; then
   wait_fastboot
 fi
 
-for s in a b; do fastboot flash "boot_$s" "$1"; done
+# Only the active slot: the other one may hold a different kernel generation.
+SLOT=$(fastboot getvar current-slot 2>&1 | sed -n "s/^current-slot: \([ab]\).*/\1/p")
+[ -n "$SLOT" ] || die "Couldn't read the active slot."
+fastboot flash "boot_$SLOT" "$1"
 say "Rebooting. Open Magisk on the R1 to confirm it shows as installed; next: tools/provision.sh"
 fastboot reboot

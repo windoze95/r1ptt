@@ -47,6 +47,7 @@ class LiveVoice(
     private var suppress = false // a press stopped the reply: drop the rest of it until the next turn
     private var active = false // an exchange is in progress
     @Volatile private var level = 0f
+    private var waitingForNet = false
     private var firstAudioLogged = false
 
     private val ticker = object : Runnable {
@@ -193,15 +194,23 @@ class LiveVoice(
     private fun connectWhenOnline(s: LiveSession, url: String, key: String, start: String, deadline: Long) {
         if (session !== s) return
         when {
-            app.radio.isOnline() -> s.connect(url, key, start)
+            app.radio.isOnline() -> {
+                waitingForNet = false
+                s.connect(url, key, start)
+            }
             SystemClock.elapsedRealtime() > deadline -> {
+                Log.w(TAG, "live: no network after ${NET_WAIT_MS / 1000} s")
+                waitingForNet = false
                 session = null
                 if (active) {
                     resetExchange()
                     fail("No network")
                 }
             }
-            else -> main.postDelayed({ connectWhenOnline(s, url, key, start, deadline) }, 200)
+            else -> {
+                waitingForNet = true // Wi-Fi is coming back from an idle cut; audio queues meanwhile
+                main.postDelayed({ connectWhenOnline(s, url, key, start, deadline) }, 200)
+            }
         }
     }
 
@@ -232,7 +241,10 @@ class LiveVoice(
                     fail(event.message)
                 }
             }
-            LiveProtocol.Event.Started -> Log.i(TAG, "live: session started")
+            LiveProtocol.Event.Started -> {
+                Log.i(TAG, "live: session started")
+                tracker.restartWait()
+            }
             LiveProtocol.Event.Other -> {}
         }
     }
@@ -241,7 +253,8 @@ class LiveVoice(
         if (!active) return
         val phase = tracker.phase(player.busy())
         when {
-            tracker.noReply() -> {
+            !waitingForNet && tracker.noReply() -> {
+                Log.w(TAG, "live: no reply")
                 resetExchange()
                 fail("No reply")
             }
@@ -254,8 +267,14 @@ class LiveVoice(
         val cfg = app.store.value
         publish(
             when (phase) {
-                LiveTracker.Phase.LISTENING -> TurnState(phase = Phase.LISTENING, level = level, heard = heard.toString().trim())
-                LiveTracker.Phase.WAITING -> TurnState(phase = Phase.THINKING, heard = heard.toString().trim(), reply = said.toString().trim())
+                LiveTracker.Phase.LISTENING -> TurnState(
+                    phase = Phase.LISTENING, level = level, heard = heard.toString().trim(),
+                    note = if (waitingForNet) CONNECTING else "",
+                )
+                LiveTracker.Phase.WAITING -> TurnState(
+                    phase = Phase.THINKING, heard = heard.toString().trim(), reply = said.toString().trim(),
+                    note = if (waitingForNet) CONNECTING else "",
+                )
                 LiveTracker.Phase.LOOKING_UP -> TurnState(
                     phase = Phase.THINKING, heard = heard.toString().trim(), reply = said.toString().trim(),
                     note = if (tracker.lookingUpWeb) "Searching the web…" else "Thinking (${cfg.live.backendModel})…",
@@ -332,7 +351,9 @@ class LiveVoice(
         const val SPEECH_RMS = 0.004f
         /** ~10 s of 40 ms chunks while waiting for the network. */
         const val MAX_PREROLL_CHUNKS = 250
-        const val NET_WAIT_MS = 12_000L
+        /** Wi-Fi coming back from an idle cut can take a while on the R1. */
+        const val NET_WAIT_MS = 30_000L
+        const val CONNECTING = "Connecting to Wi-Fi…"
         const val TAG = "r1ptt"
     }
 }

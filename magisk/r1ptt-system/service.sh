@@ -57,6 +57,6 @@ run() {
   run settings put global transition_animation_scale 0.5
   run settings put global animator_duration_scale 0.5
 
-  # Record which keylayout won, to debug the button remap.
-  dumpsys input | grep -A14 'Name: "mtk-kpd"' | grep -m1 'KeyLayoutFile' >>"$LOG"
+  # Record which keylayouts won, to debug the button and wheel remaps.
+  dumpsys input | grep -E 'KeyLayoutFile: .*(mtk-kpd|och1970)' >>"$LOG"
 ) &

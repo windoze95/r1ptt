@@ -83,6 +83,8 @@ class HomeActivity : Activity(), DictationTarget {
             v.onApplyWindowInsets(insets)
         }
         app.turns.target = this
+        // Volume keys (the wheel) adjust speech, not the ringer, even when nothing is playing.
+        volumeControlStream = AudioManager.STREAM_MUSIC
 
         val missing = listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
             .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
@@ -127,9 +129,15 @@ class HomeActivity : Activity(), DictationTarget {
                 if (event.repeatCount == 0) PttService.instance?.frameworkButton(event.action == KeyEvent.ACTION_DOWN)
                 return true
             }
-            // The scroll wheel: scroll the conversation, or set the volume while speaking.
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> if (!isActive()) {
-                if (event.action == KeyEvent.ACTION_DOWN) wheel(event.keyCode == KeyEvent.KEYCODE_DPAD_UP)
+            // The scroll wheel, remapped to volume by the Magisk keylayout: always the speech volume.
+            KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    getSystemService(AudioManager::class.java).adjustStreamVolume(
+                        AudioManager.STREAM_MUSIC,
+                        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER,
+                        AudioManager.FLAG_SHOW_UI,
+                    )
+                }
                 return true
             }
         }
@@ -179,7 +187,7 @@ class HomeActivity : Activity(), DictationTarget {
         status.setTextColor(getColor(if (s.phase == Phase.ERROR) R.color.error else R.color.accent))
         status.text = when (s.phase) {
             Phase.IDLE -> s.note.ifEmpty { idleHint() }
-            Phase.LISTENING -> "Listening… release to send"
+            Phase.LISTENING -> if (s.note.isNotEmpty()) "Listening · ${s.note.lowercase()}" else "Listening… release to send"
             Phase.DICTATING -> "Dictating… release to insert"
             Phase.TRANSCRIBING -> "Transcribing…"
             Phase.THINKING -> s.note.ifEmpty { "Thinking…" }
@@ -249,18 +257,6 @@ class HomeActivity : Activity(), DictationTarget {
         textSp = c.textSizeSp.toFloat()
         live.textSize = textSp
         for (i in 0 until list.childCount) (list.getChildAt(i) as? TextView)?.textSize = textSp
-    }
-
-    private fun wheel(up: Boolean) {
-        val phase = app.turns.state.value.phase
-        val audible = phase == Phase.SPEAKING || (phase == Phase.ANSWERING && app.store.value.tts.enabled)
-        if (audible) {
-            val am = getSystemService(AudioManager::class.java)
-            am.adjustStreamVolume(AudioManager.STREAM_MUSIC, if (up) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, 0)
-            status.text = "Volume ${am.getStreamVolume(AudioManager.STREAM_MUSIC)}/${am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)}"
-        } else {
-            scroll.smoothScrollBy(0, if (up) -dp(90) else dp(90))
-        }
     }
 
     private fun scrollToEnd() {

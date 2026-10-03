@@ -18,7 +18,7 @@ source "$(dirname "$0")/lib.sh"
 [ $# -ge 1 ] || die "usage: $0 <extracted stock firmware folder>"
 need fastboot
 IMG=$(stock_dir "$1")
-for f in boot.img dtbo.img vbmeta.img vbmeta_system.img vbmeta_vendor.img super.img; do
+for f in boot.img dtbo.img vbmeta.img vbmeta_system.img vbmeta_vendor.img super.img userdata.img; do
   [ -f "$IMG/$f" ] || die "missing $IMG/$f"
 done
 
@@ -41,6 +41,11 @@ done
 say "vbmeta with verification off"
 flash_vbmeta_disabled "$IMG"
 
+# Wipe data the way Rabbit's own restore does (fastbootd's `fastboot -w` skips it on the R1).
+say "Wiping data"
+fastboot erase userdata
+fastboot flash userdata "$IMG/userdata.img"
+
 say "Rebooting to fastbootd for the super partition"
 fastboot reboot fastboot
 sleep 5
@@ -49,7 +54,6 @@ in_fastbootd || die "Didn't reach fastbootd."
 fastboot snapshot-update cancel 2>/dev/null || true
 say "Flashing super (about two minutes)"
 fastboot flash super "$IMG/super.img"
-fastboot -w
 
 say "Booting stock rabbitOS. Once it reaches its setup screen the base is good; next: tools/flash-gsi.sh"
 fastboot reboot

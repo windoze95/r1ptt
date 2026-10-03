@@ -287,7 +287,11 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     private suspend fun awaitNetwork() {
+        if (app.radio.isOnline()) return
+        // Wi-Fi is coming back from an idle cut; say so rather than look stuck.
+        _state.update { it.copy(note = "Connecting to Wi-Fi…") }
         if (!app.radio.awaitOnline(NET_WAIT_MS)) throw IOException("No network")
+        _state.update { it.copy(note = "") }
     }
 
     /** Runs blocking network code on the pool; cancelling the coroutine aborts its HTTP calls. */
@@ -363,6 +367,6 @@ class TurnController(private val app: App) : Gestures.Listener {
         const val MIN_CLIP_MS = 400L
         /** Peak 100 ms RMS below this is silence (the button was held but nobody spoke). */
         const val SILENCE = 0.002f
-        const val NET_WAIT_MS = 12_000L
+        const val NET_WAIT_MS = 30_000L
     }
 }

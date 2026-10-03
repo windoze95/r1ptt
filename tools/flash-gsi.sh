@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Replaces rabbitOS's system with a LineageOS 21 GSI, keeping Rabbit's kernel and vendor (the side
-# button only works with the stock kernel). Also turns verified boot off and wipes data.
+# Replaces rabbitOS's system with a LineageOS 21 GSI on the active slot, keeping Rabbit's kernel and
+# vendor (the side button only works with Rabbit's kernel). Also turns verified boot off and wipes data.
 #
 # GSI: Andy Yan's LineageOS 21, arm64 vanilla, e.g. lineage-21.0-YYYYMMDD-UNOFFICIAL-arm64_bvN.img.gz
 #      https://sourceforge.net/projects/andyyan-gsi/files/  (lineage-21-pre-qpr2-td or lineage-21-td)
 #
 # Usage: tools/flash-gsi.sh <gsi .img|.img.gz|.img.xz> <extracted stock firmware folder> [--keep-product]
-#        (R1 in fastboot mode, bootloader unlocked, stock baseline flashed)
+#        (R1 in fastboot mode, bootloader unlocked; the stock baseline is optional)
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -27,16 +27,22 @@ if in_fastbootd; then
 fi
 fastboot getvar unlocked 2>&1 | grep -q 'unlocked: yes' || die "Bootloader is locked."
 
-confirm "Flash $(basename "$GSI") over system_a and ERASE all data on the R1?"
+confirm "Flash $(basename "$GSI") over the active system partition and ERASE all data on the R1?"
 
-# The GSI goes to system_a, so slot a has to be the one that boots. R1s that took OTAs can sit on
-# slot b, and the stock baseline (super) only holds slot-a partitions anyway.
-say "Selecting slot a"
-fastboot --set-active=a || true
-fastboot getvar current-slot 2>&1 | grep -q 'current-slot: a' || die "Couldn't switch to slot a."
+# Flash the slot the R1 boots from. Without the stock baseline that is wherever its last OTA left
+# it (the current kernel and vendor live there; one R1 here was on b). After the baseline it is a.
+SLOT=$(fastboot getvar current-slot 2>&1 | sed -n "s/^current-slot: \([ab]\).*/\1/p")
+[ -n "$SLOT" ] || die "Couldn't read the active slot."
+say "Active slot: $SLOT"
 
 say "vbmeta with verification off"
 flash_vbmeta_disabled "$IMG"
+
+# Wipe data the way Rabbit's own restore does: erase, then the stock (empty) userdata image. fastbootd
+# can't do it here (`fastboot -w` there reports "partition not found" and skips the wipe).
+say "Wiping data"
+fastboot erase userdata
+fastboot flash userdata "$IMG/userdata.img"
 
 say "Rebooting to fastbootd"
 fastboot reboot fastboot
@@ -47,13 +53,12 @@ fastboot snapshot-update cancel 2>/dev/null || true
 
 if [ "$KEEP_PRODUCT" = 0 ]; then
   # Stock product holds Rabbit's launcher and services: dead weight (and battery drain) on a GSI.
-  say "Removing stock product_a"
-  fastboot delete-logical-partition product_a 2>/dev/null || warn "product_a not deleted (maybe already gone)"
+  say "Removing stock product_$SLOT"
+  fastboot delete-logical-partition "product_$SLOT" 2>/dev/null || warn "product_$SLOT not deleted (maybe already gone)"
 fi
 
-say "Flashing the GSI to system_a"
-fastboot flash system_a "$GSI"
-fastboot -w
+say "Flashing the GSI to system_$SLOT"
+fastboot flash "system_$SLOT" "$GSI"
 
 say "Booting LineageOS. First boot takes a few minutes."
 say "Next: finish setup on the R1, enable USB debugging, then follow docs/INSTALL.md (Magisk)."

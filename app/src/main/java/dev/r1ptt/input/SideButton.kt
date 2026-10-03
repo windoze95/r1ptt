@@ -69,6 +69,9 @@ class SideButton(
     /** One root session; true if the stream came up. */
     private fun session(): Boolean {
         val node = findNode() ?: return false
+        // A reader left over from a previous app process keeps running as root until the next
+        // button event; clear those out first.
+        Root.run("pkill -f 'dd if=$node bs=${InputEvent.SIZE}'", 3000)
         val p = Root.stream("test -c $node && echo READY && exec dd if=$node bs=${InputEvent.SIZE} 2>/dev/null")
             ?: return false
         proc = p

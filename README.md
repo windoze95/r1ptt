@@ -35,7 +35,7 @@ The R1 is an Android 13 phone underneath (MediaTek MT6765). The firmware is four
 | **Hold** | Talk; release to send. The reply streams and is spoken. | Dictate; release to insert at the cursor. |
 | **Tap** | Screen off. When speaking, stop. (A tap on a dark screen just wakes it.) | Send the typed text. |
 | **Double-tap** | New conversation. | — |
-| **Scroll wheel** | Scroll the conversation; set volume while speaking. | — |
+| **Scroll wheel** | Volume (always). | Volume. |
 
 Tap the text field on the touchscreen to bring up the keyboard. The gear icon opens settings.
 
@@ -44,15 +44,15 @@ Tap the text field on the touchscreen to bring up the keyboard. The gear icon op
 Idle time is where a 1000 mAh battery goes.
 
 - **The cellular modem is always off** (airplane mode with Wi-Fi left on). A SIM is optional.
-- **Wi-Fi switches off** after 3 minutes with the screen dark. The next button press turns it back
+- **Wi-Fi switches off** after 10 minutes with the screen dark. The next button press turns it back
   on, and it reconnects while you're still talking.
 - **Nothing runs in the background:**
   - no polling, scanning, location or Bluetooth;
   - Rabbit's apps are removed;
   - Doze starts within seconds.
 - **The screen stays on only during a turn**, then times out after 15 s at low brightness.
-- **Audio is kept small:** recordings are compressed to AAC while you hold the button, and the
-  transcription, chat and speech requests share one connection.
+- **The network is used only during a turn:** voice streams only while you hold the button, and the
+  live session closes 20 s after a reply.
 
 [docs/BATTERY.md](docs/BATTERY.md) covers the design and how to measure the idle drain.
 

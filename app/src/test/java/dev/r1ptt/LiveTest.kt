@@ -95,6 +95,18 @@ class LiveTest {
     }
 
     @Test
+    fun waitingForWifiDoesNotEatTheReplyTimeout() {
+        val t = tracker()
+        t.hold(); now = 1000; t.release()
+        now = 26_000 // Wi-Fi took 25 s to come back; the session only now started
+        t.restartWait()
+        assertFalse(t.noReply())
+        assertEquals(LiveTracker.Phase.WAITING, t.phase(false))
+        now = 27_000; t.audio(speech = true)
+        assertEquals(LiveTracker.Phase.SPEAKING, t.phase(true))
+    }
+
+    @Test
     fun silenceIsNotAReplyAndEventuallyTimesOut() {
         val t = tracker()
         t.hold(); now = 1000; t.release()

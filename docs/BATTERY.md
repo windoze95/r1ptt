@@ -15,13 +15,13 @@ So the work goes into making idle as close to "everything off" as possible.
 | Drain | Approach |
 |---|---|
 | Cellular modem | Kept off permanently (airplane mode set up to leave Wi-Fi alone). `power.cellular: true` turns it back on if a SIM is in. |
-| Wi-Fi | Off after `power.wifiIdleMinutes` (default 3) with the screen dark; on again at the next press or screen-on. Reconnecting takes 1–3 s and overlaps your speaking. |
+| Wi-Fi | Off after `power.wifiIdleMinutes` (default 10) with the screen dark; on again at the next press or screen-on. Reconnecting can take several seconds on the R1 (time it with `tools/wifi-wake-test.sh`); the screen shows "Connecting to Wi-Fi…" meanwhile, and your words are buffered, not lost. |
 | Bluetooth, location, scanning | Off: no Wi-Fi or BLE "always scanning", no Wi-Fi auto-wakeup, no network recommendations. |
 | Background apps | Rabbit's product partition is removed and LineageOS extras are disabled (`tools/debloat.txt`). The app itself has no timers, polling or open connections while idle. |
 | Doze | Enters light idle immediately and deep idle about 30 s after screen-off (module `service.sh`). |
 | Screen | On only while a turn is active, then a 15 s timeout at brightness 60/255. No ambient display or lift/tap-to-wake. |
 | Button | Read by a root `dd` blocked on the input device: zero CPU until a press. The kernel's key interrupt wakes the SoC. |
-| Network per turn | Speech is AAC at 32 kbit/s (about 4 KB per second of talking), encoded while you hold the button. Transcription, chat and speech reuse one HTTP/2 connection, warmed up while you talk. |
+| Network per turn | Voice turns (speech-to-speech) stream raw 24 kHz audio only while you hold the button, plus the spoken reply; the session closes 20 s after an exchange. Dictation uploads compressed AAC (about 4 KB per second of talking), and transcription, chat and speech share one HTTP/2 connection. |
 | CPU per turn | No on-device speech models; the cloud (or your server) does the heavy work. |
 
 ## Measuring
@@ -46,7 +46,7 @@ To be filled in on hardware. These targets are first guesses, to be adjusted aft
 
 | Setup | Target idle drain | Measured |
 |---|---|---|
-| Wi-Fi cut after 3 min (default) | < 0.5 %/h | |
+| Wi-Fi cut after 10 min (default) | < 0.5 %/h | |
 | Wi-Fi always on (`wifiIdleMinutes: 0`) | < 1.5 %/h | |
 | Cellular on (`cellular: true`) | — | |
 

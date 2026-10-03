@@ -73,7 +73,7 @@ data class Live(
 
 data class Power(
     /** Turn Wi-Fi off after this many minutes with the screen off; 0 keeps it on. */
-    val wifiIdleMinutes: Int = 3,
+    val wifiIdleMinutes: Int = 10,
     val screenTimeoutSec: Int = 15,
     /** Manual backlight level, 1..255. */
     val brightness: Int = 60,

@@ -62,21 +62,17 @@ uv tool install git+https://github.com/bkerler/mtkclient     # needs libusb: bre
 mtk r nvram,nvdata,nvcfg,protect1,protect2,proinfo nvram.bin,nvdata.bin,nvcfg.bin,protect1.bin,protect2.bin,proinfo.bin
 ```
 
-## 2. Stock baseline
+## 2. Stock baseline (usually skip it)
 
-This gives the kernel, vendor and system a known starting point. Use either route:
+Skip this on an R1 that is simply up to date. `tools/flash-gsi.sh` keeps Rabbit's current kernel and
+vendor, on whichever slot the R1 boots from, and those already match its bootloader. That's how the
+first R1 was done (2026-10-03, Rabbit kernel from September 2026).
 
-- **Preferred:** Rabbit's flash tool → **Flash Stock ROM**.
-- **Command line:** with the R1 in fastboot, run `tools/flash-baseline.sh firmware/stock`.
-
-Use Rabbit's tool if the R1 has taken OTA updates. Check with
-`fastboot getvar version-bootloader`: if the date is newer than May 2025, the R1 is ahead of
-v0.8.293. (One R1 checked on 2026-10-03 reported `k65v1_64_bsp-…-20250905…`.) Rabbit's tool writes
-the full matching v0.8.293 set, including the power-management and modem firmware. The script
-deliberately leaves the bootloader chain alone, so on an updated R1 it would pair newer firmware
-with the older kernel.
-
-Let it boot into rabbitOS once to confirm the base works, then power it off.
+Flash the v0.8.293 baseline only if the R1 is in an unknown or broken state. Use either route:
+- **Rabbit's flash tool → Flash Stock ROM.** It writes the full matching set, then **locks the
+  bootloader again**, so run `fastboot flashing unlock` once more afterwards.
+- **Command line:** with the R1 in fastboot, run `tools/flash-baseline.sh firmware/stock`. This leaves the
+  bootloader chain alone, so on an R1 that has taken OTAs it pairs newer firmware with the older kernel.
 
 ## 3. LineageOS GSI
 
@@ -85,37 +81,30 @@ uv run --with pyserial tools/fastboot-entry.py     # then plug in the powered-of
 tools/flash-gsi.sh firmware/lineage-21.0-*-arm64_bvN.img.gz firmware/stock
 ```
 
-The script does four things:
+The stock folder only supplies the vbmeta and empty-userdata images. The script:
 - turns verified boot off;
-- removes Rabbit's `product` partition (its launcher and services);
-- writes the GSI to `system_a`;
-- wipes data and reboots.
+- wipes data the way Rabbit's restore does;
+- removes Rabbit's `product` partition (its launcher and services) on the active slot;
+- writes the GSI to the active slot's `system` and reboots.
 
-The first boot takes a few minutes. Then, on the R1:
-1. Go through setup and connect to Wi-Fi.
-2. Go to Settings → About phone and tap **Build number** seven times.
-3. Go to Settings → System → Developer options and turn on **USB debugging**. Accept the prompt
-   when you plug into the Mac.
-
-If everything is too big to tap, run `adb shell wm density 190`.
+The first boot takes a couple of minutes. The LineageOS GSI is a userdebug build with adb open, so
+`adb devices` should list the R1 right away. Go through setup on the R1 and connect to Wi-Fi. If
+everything is too big to tap, run `adb shell wm density 190`.
 
 ## 4. Root with Magisk
 
 ```sh
-adb install firmware/Magisk-v30.*.apk
-adb push firmware/stock/*/boot.img /sdcard/Download/boot.img
+tools/root.sh
 ```
 
-On the R1, open Magisk, go to **Install → Select and Patch a File**, and pick `Download/boot.img`.
-Then:
+The script does this without any tapping on the R1:
+- installs the Magisk app;
+- copies the R1's own current boot image off over `adb root`;
+- patches it with Magisk's own script, on the R1;
+- flashes it to the active slot and reboots.
 
-```sh
-adb pull "$(adb shell ls /sdcard/Download/magisk_patched-*.img | tr -d '\r')" out/
-tools/flash-boot.sh out/magisk_patched-*.img
-```
-
-After it reboots, open Magisk; it should show as installed. The first `su` from adb pops a prompt
-on the R1; allow it for **Shell**.
+The unpatched image is kept in `out/`; flash it back with `tools/flash-boot.sh` to unroot.
+Magisk shows "additional setup" until `provision.sh` finishes its file setup in the next step.
 
 ## 5. Provision
 
@@ -124,7 +113,7 @@ tools/provision.sh --config tools/r1ptt.json
 ```
 
 The script makes these changes:
-- Installs the Magisk module (button remap and power defaults).
+- Finishes Magisk's setup, and installs the Magisk module (button and wheel remaps, power defaults).
 - Installs the app with its permissions.
 - Grants the app root.
 - Makes the app the home screen.
@@ -141,24 +130,23 @@ disabled apps.
 
 Work through these with the R1 on USB:
 
-1. **Hold the button with the screen on.** The status line should show the listening state, then
-   the transcript, then the reply streaming in and being spoken. The screen turns off about 15 s
-   later.
-2. **The press that wakes the screen.** Let the screen go off and wait a minute (or run
-   `adb shell dumpsys deviceidle force-idle`). Then hold the button and immediately say "testing
-   one two three". The transcript must start with "testing".
-   - To inspect the recording, set `"saveClips": true` and pull it from
-     `/sdcard/Android/data/dev.r1ptt/files/clips/`.
-3. **Dictation.** Tap the text field so the keyboard opens. Hold, speak and release: the text
-   lands at the cursor and nothing is sent. A tap of the button then sends it.
-4. **Taps.**
-   - A tap with the screen on turns it off right away.
-   - A tap while it's speaking stops the speech.
-   - A double-tap shows "New conversation".
-5. **Memory.** Say "My name is Sam", then ask "What's my name?" and get the right answer.
-6. **Wi-Fi cut.** After 3 minutes with the screen off, `adb shell cmd wifi status` shows Wi-Fi
-   disabled. The next hold still works: it reconnects while you talk.
-7. **Battery.** Unplug the R1 overnight, then plug it in and run `tools/battery-report.sh`. See
+1. **Voice, keyboard closed.** Hold the button, ask something, let go. It should start answering
+   in voice about a second later, with the text on screen. The screen turns off about 15 s after it
+   finishes.
+2. **A follow-up** within 20 seconds keeps the context. A web question ("weather in …") shows
+   "Searching the web…" while `gpt-6.1-sol` looks it up.
+3. **The press that wakes the screen.** Let the screen go off and wait a minute (or run
+   `adb shell dumpsys deviceidle force-idle`). Then hold the button and speak right away: nothing
+   you said should be lost.
+4. **Dictation.** Tap the text field so the keyboard opens. Hold, speak and release: the text lands
+   at the cursor and nothing is sent. A tap of the button sends it, and the reply is read aloud.
+5. **Taps.** A tap with the screen on turns it off. A tap while it's talking stops it. A double-tap
+   shows "New conversation".
+6. **Scroll wheel.** It changes the volume (a slider appears), in any screen state.
+7. **Wi-Fi cut.** After 10 minutes with the screen off, `adb shell cmd wifi status` shows Wi-Fi
+   disabled. The next hold shows "Connecting to Wi-Fi…" and then works. `tools/wifi-wake-test.sh`
+   times how long that reconnect takes.
+8. **Battery.** Unplug the R1 overnight, then plug it in and run `tools/battery-report.sh`. See
    [BATTERY.md](BATTERY.md).
 
 ## Troubleshooting

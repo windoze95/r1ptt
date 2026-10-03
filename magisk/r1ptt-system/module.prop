@@ -3,4 +3,4 @@ name=R1 push-to-talk system
 version=v0.1.0
 versionCode=1
 author=r1ptt
-description=Side button (mtk-kpd 116) becomes BUTTON_1 with WAKE for the r1ptt app; boot-time power defaults (no scanning, location or Bluetooth, faster Doze, no IME nav strip).
+description=Side button (mtk-kpd 116) becomes BUTTON_1 with WAKE for the r1ptt app, scroll wheel becomes volume; boot-time power defaults (no scanning, location or Bluetooth, faster Doze, no IME nav strip).

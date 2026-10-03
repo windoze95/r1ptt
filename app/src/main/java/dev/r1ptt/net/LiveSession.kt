@@ -26,6 +26,7 @@ class LiveSession(private val listener: Listener) {
         private set
     @Volatile var gone = false
         private set
+    @Volatile private var closing = false
 
     fun connect(url: String, key: String, startMessage: String) {
         val req = Request.Builder().url(url).header("Authorization", "Bearer $key").build()
@@ -56,7 +57,8 @@ class LiveSession(private val listener: Listener) {
                         friendly(ApiError(response.code, errorMessage(response.body?.string().orEmpty())))
                     else -> friendly(t)
                 }
-                if (!gone) listener.onFailure(message)
+                // Hanging up after our own close request isn't a failure.
+                if (!gone && !closing) listener.onFailure(message)
                 finish()
             }
         })
@@ -73,6 +75,7 @@ class LiveSession(private val listener: Listener) {
     /** Asks the server to end the session (it answers session.closed, then hangs up). */
     fun close() {
         if (gone) return
+        closing = true
         if (started) send(LiveProtocol.CLOSE) else ws?.cancel()
         // Don't wait forever for a polite goodbye.
         ws?.let { w -> Thread { Thread.sleep(3000); w.cancel() }.start() }

@@ -50,6 +50,11 @@ class LiveTracker(
         }
     }
 
+    /** The session only just came up (e.g. after waiting for Wi-Fi): start the no-reply clock now. */
+    fun restartWait() {
+        if (!holding && releasedAt >= 0 && !gotReply) releasedAt = clock()
+    }
+
     /** Forget the exchange (a tap stopped it, or the session ended). */
     fun reset() {
         holding = false
