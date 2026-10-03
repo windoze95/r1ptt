@@ -118,6 +118,7 @@ class TurnController(private val app: App) : Gestures.Listener {
         app.screen.holdAwake()
         if (liveTurn) {
             live.startCapture()
+            live.warm() // connect now, not once the hold is confirmed
             return
         }
         val r = Recorder(clipDir()) { level ->
@@ -186,6 +187,13 @@ class TurnController(private val app: App) : Gestures.Listener {
         app.history.newConversation()
         note("New conversation")
     }
+
+    /** Screen on: with the keyboard closed, the next thing is probably a voice turn. */
+    fun screenOn() {
+        if (target?.isActive() != true) live.warm()
+    }
+
+    fun screenOff() = live.screenOff()
 
     /** A message typed into the launcher's text field: chat model + text-to-speech. */
     fun sendText(text: String) {

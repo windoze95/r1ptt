@@ -5,7 +5,8 @@ talk; on release, it either sends what you said or types it into the text field:
 
 - **Keyboard closed:** speech-to-speech. Your voice streams to OpenAI's `gpt-live-1`, which answers in
   voice (about a second after you let go) and hands real thinking, plus web search, to `gpt-6.1-sol`.
-  The text appears on screen too.
+  The text appears on screen too. The voice session opens as soon as the screen wakes and closes when it
+  goes dark; OpenAI bills it by the second while it's open (about $0.05 a minute).
 - **Keyboard open:** your words are transcribed (`gpt-transcribe`) into the text field and not sent,
   so you can edit first. A tap of the button sends it; `gpt-6.1-sol` answers and the reply is read
   aloud (`gpt-4o-mini-tts`).

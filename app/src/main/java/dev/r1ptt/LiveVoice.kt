@@ -56,7 +56,8 @@ class LiveVoice(
             if (active) main.postDelayed(this, 200)
         }
     }
-    private val closer = Runnable { closeSession() }
+    /** Ends an idle session; never one mid-exchange (then it checks again later). */
+    private val closer = Runnable { if (busy) scheduleClose() else closeSession() }
 
     val busy: Boolean get() = active || mic != null
 
@@ -133,6 +134,27 @@ class LiveVoice(
             preRoll.clear()
         }
         if (stoppedReply) finishExchange()
+        else if (!active) scheduleClose() // a warm session opened at the press shouldn't linger
+    }
+
+    /**
+     * Opens a session ahead of time (screen on, or the moment of a press) so a hold doesn't wait for
+     * the TLS and session handshake, which took 3.5 s on a cold start. It's billed per second while
+     * open, so an idle warm session closes at screen-off or after idleCloseSec.
+     */
+    fun warm() {
+        val cfg = app.store.value
+        if (!cfg.liveVoice || !cfg.live.warm) return
+        if (session?.takeIf { !it.gone } == null) {
+            Log.i(TAG, "live: warming a session")
+            openSession()
+        }
+        if (!busy) scheduleClose()
+    }
+
+    /** Screen off: nobody is about to talk, so don't pay for an idle session. */
+    fun screenOff() {
+        if (!busy) closeSession()
     }
 
     /** New conversation, or a typed turn: end the session so the next one starts from the history. */

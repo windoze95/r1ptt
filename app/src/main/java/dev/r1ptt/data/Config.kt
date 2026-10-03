@@ -67,6 +67,9 @@ data class Live(
     val backendModel: String = "gpt-6.1-sol",
     val reasoningEffort: String = "low",
     val webSearch: Boolean = true,
+    /** Open a session as soon as the screen turns on (or at a press), so a hold doesn't wait for the
+     *  handshake. It closes at screen-off, or idleCloseSec after the last exchange. */
+    val warm: Boolean = true,
     /** The session is billed per second while open; close it this long after the last reply. */
     val idleCloseSec: Int = 20,
 )

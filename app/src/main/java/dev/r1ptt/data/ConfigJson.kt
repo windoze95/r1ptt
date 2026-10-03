@@ -29,6 +29,7 @@ object ConfigJson {
             put("backendModel", c.live.backendModel)
             put("reasoningEffort", c.live.reasoningEffort)
             put("webSearch", c.live.webSearch)
+            put("warm", c.live.warm)
             put("idleCloseSec", c.live.idleCloseSec)
         })
         put("power", JSONObject().apply {
@@ -82,6 +83,7 @@ object ConfigJson {
                     backendModel = l.str("backendModel", base.live.backendModel),
                     reasoningEffort = l.str("reasoningEffort", base.live.reasoningEffort),
                     webSearch = l.bool("webSearch", base.live.webSearch),
+                    warm = l.bool("warm", base.live.warm),
                     idleCloseSec = l.int("idleCloseSec", base.live.idleCloseSec),
                 )
             } ?: base.live,

@@ -21,7 +21,7 @@ So the work goes into making idle as close to "everything off" as possible.
 | Doze | Enters light idle immediately and deep idle about 30 s after screen-off (module `service.sh`). |
 | Screen | On only while a turn is active, then a 15 s timeout at brightness 60/255. No ambient display or lift/tap-to-wake. |
 | Button | Read by a root `dd` blocked on the input device: zero CPU until a press. The kernel's key interrupt wakes the SoC. |
-| Network per turn | Voice turns (speech-to-speech) stream raw 24 kHz audio only while you hold the button, plus the spoken reply; the session closes 20 s after an exchange. Dictation uploads compressed AAC (about 4 KB per second of talking), and transcription, chat and speech share one HTTP/2 connection. |
+| Network per turn | Voice turns (speech-to-speech) stream raw 24 kHz audio only while you hold the button, plus the spoken reply. The session opens when the screen wakes (so it's ready by the time you talk) and closes at screen-off or 20 s after an exchange; set `live.warm: false` to connect only on a hold. Dictation uploads compressed AAC (about 4 KB per second of talking), and transcription, chat and speech share one HTTP/2 connection. |
 | CPU per turn | No on-device speech models; the cloud (or your server) does the heavy work. |
 
 ## Measuring
