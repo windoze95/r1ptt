@@ -17,11 +17,11 @@ mkdir -p "$OUT"
 
 # Merge the example's defaults under the real config, like the app does.
 DEFAULTS='{"activeProvider":"openai",
-  "providers":{"openai":{"baseUrl":"https://api.openai.com/v1","model":"gpt-5-mini","session":"history"},
+  "providers":{"openai":{"baseUrl":"https://api.openai.com/v1","model":"gpt-6.1-sol","session":"history"},
                "openclaw":{"model":"openclaw/default","session":"openclaw-user"},
                "hermes":{"model":"hermes-agent","session":"hermes-session"}},
-  "stt":{"baseUrl":"https://api.openai.com/v1","model":"gpt-4o-mini-transcribe"},
-  "tts":{"baseUrl":"https://api.openai.com/v1","model":"gpt-4o-mini-tts","voice":"marin","enabled":true}}'
+  "stt":{"baseUrl":"https://api.openai.com/v1","model":"gpt-transcribe"},
+  "tts":{"baseUrl":"https://api.openai.com/v1","model":"gpt-4o-mini-tts-2025-12-15","voice":"marin","enabled":true}}'
 C=$(jq -s '.[0] * .[1]' <(echo "$DEFAULTS") "$CFG")
 cfg() { jq -r "$1 // empty" <<<"$C"; }
 

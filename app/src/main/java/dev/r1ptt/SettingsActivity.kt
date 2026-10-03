@@ -40,6 +40,9 @@ class SettingsActivity : Activity() {
     private lateinit var sttModel: EditText
     private lateinit var ttsUrl: EditText
     private lateinit var ttsModel: EditText
+    private lateinit var liveOn: Switch
+    private lateinit var liveBackend: EditText
+    private lateinit var liveSearch: Switch
     private lateinit var idleMinutes: EditText
     private lateinit var screenTimeout: EditText
     private lateinit var brightness: EditText
@@ -88,6 +91,11 @@ class SettingsActivity : Activity() {
         sttModel = field("Speech-to-text model", cfg.stt.model)
         ttsUrl = field("Text-to-speech URL", cfg.tts.endpoint.baseUrl)
         ttsModel = field("Text-to-speech model", cfg.tts.endpoint.model)
+
+        header("Voice turns (keyboard closed)")
+        liveOn = switch("Speech-to-speech with ${cfg.live.model} (OpenAI)", cfg.live.enabled)
+        liveBackend = field("Thinking model behind the voice", cfg.live.backendModel)
+        liveSearch = switch("Let it search the web", cfg.live.webSearch)
 
         header("Power")
         idleMinutes = field("Wi-Fi off after idle (minutes, 0 = never)", cfg.power.wifiIdleMinutes.toString(), number = true)
@@ -145,6 +153,11 @@ class SettingsActivity : Activity() {
                 enabled = speak.isChecked,
                 voice = voice.text.toString().trim(),
                 endpoint = cfg.tts.endpoint.copy(baseUrl = ttsUrl.text.toString().trim(), model = ttsModel.text.toString().trim()),
+            ),
+            live = cfg.live.copy(
+                enabled = liveOn.isChecked,
+                backendModel = liveBackend.text.toString().trim().ifBlank { cfg.live.backendModel },
+                webSearch = liveSearch.isChecked,
             ),
             power = cfg.power.copy(
                 wifiIdleMinutes = idleMinutes.int(cfg.power.wifiIdleMinutes).coerceAtLeast(0),

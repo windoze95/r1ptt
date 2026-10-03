@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Bundle
+import android.text.SpannableStringBuilder
+import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -188,9 +190,18 @@ class HomeActivity : Activity(), DictationTarget {
         val listening = s.phase == Phase.LISTENING || s.phase == Phase.DICTATING
         meter.visibility = if (listening) View.VISIBLE else View.INVISIBLE
         meter.progress = (sqrt(s.level.coerceIn(0f, 1f)) * 160).toInt().coerceAtMost(100)
-        if (s.phase == Phase.THINKING || s.phase == Phase.ANSWERING) {
+        // The exchange in progress: what was heard (speech-to-speech turns) and the reply so far.
+        val showLive = s.phase == Phase.THINKING || s.phase == Phase.ANSWERING ||
+            (s.phase.active && (s.heard.isNotEmpty() || s.reply.isNotEmpty()))
+        if (showLive) {
             live.visibility = View.VISIBLE
-            live.text = s.reply.ifEmpty { "…" }
+            live.text = SpannableStringBuilder().apply {
+                if (s.heard.isNotEmpty()) {
+                    append(s.heard, ForegroundColorSpan(getColor(R.color.dim)), 0)
+                    append("\n\n")
+                }
+                append(s.reply.ifEmpty { if (s.phase == Phase.LISTENING) "" else "…" })
+            }
             scrollToEnd()
         } else {
             live.visibility = View.GONE

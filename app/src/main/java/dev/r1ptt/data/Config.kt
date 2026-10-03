@@ -44,7 +44,7 @@ data class Endpoint(
 
 data class Tts(
     val enabled: Boolean = true,
-    val endpoint: Endpoint = Endpoint(Config.OPENAI_URL, model = "gpt-4o-mini-tts"),
+    val endpoint: Endpoint = Endpoint(Config.OPENAI_URL, model = "gpt-4o-mini-tts-2025-12-15"),
     val voice: String = "marin",
     /** "pcm" (raw 16-bit, OpenAI) or "wav" (servers without raw PCM, e.g. Speaches). */
     val format: String = "pcm",
@@ -52,6 +52,23 @@ data class Tts(
     val sampleRate: Int = 24_000,
     /** Optional speaking-style hint; only sent when set (gpt-4o-mini-tts understands it). */
     val instructions: String = "",
+)
+
+/**
+ * Speech-to-speech for voice turns (keyboard closed) on the OpenAI provider: gpt-live-1 hears the
+ * user and answers in voice, handing anything that needs real thinking to [backendModel]. Typed and
+ * dictated turns keep using chat + text-to-speech.
+ */
+data class Live(
+    val enabled: Boolean = true,
+    val url: String = "wss://api.openai.com/v1/live/sessions",
+    val model: String = "gpt-live-1",
+    val voice: String = "marin",
+    val backendModel: String = "gpt-6.1-sol",
+    val reasoningEffort: String = "low",
+    val webSearch: Boolean = true,
+    /** The session is billed per second while open; close it this long after the last reply. */
+    val idleCloseSec: Int = 20,
 )
 
 data class Power(
@@ -70,10 +87,11 @@ data class Config(
     val systemPrompt: String = DEFAULT_STYLE,
     /** Messages of context sent each turn in [SessionMode.HISTORY] mode. */
     val historyMessages: Int = 12,
-    val stt: Endpoint = Endpoint(OPENAI_URL, model = "gpt-4o-mini-transcribe"),
+    val stt: Endpoint = Endpoint(OPENAI_URL, model = "gpt-transcribe"),
     /** ISO-639-1 language hint for transcription; blank = auto-detect. */
     val sttLanguage: String = "",
     val tts: Tts = Tts(),
+    val live: Live = Live(),
     val power: Power = Power(),
     /** Short beeps when listening starts and on errors. */
     val earcons: Boolean = true,
@@ -84,6 +102,11 @@ data class Config(
     val buttonDevice: String = "mtk-kpd",
 ) {
     val provider: Provider get() = providers[activeProvider] ?: providers.values.first()
+
+    /** Voice turns go speech-to-speech only on OpenAI; agent backends need their own pipeline. */
+    val liveVoice: Boolean get() = live.enabled && provider.id == "openai" && keyFor(liveEndpoint).isNotBlank()
+
+    val liveEndpoint: Endpoint get() = Endpoint(live.url, model = live.model)
 
     /** The key for [endpoint]: its own if set, else the key of a provider on the same host. */
     fun keyFor(endpoint: Endpoint): String {
@@ -109,7 +132,7 @@ data class Config(
 object Presets {
     val providers: Map<String, Provider> = listOf(
         Provider(
-            id = "openai", label = "ChatGPT (OpenAI)", baseUrl = Config.OPENAI_URL, model = "gpt-5-mini",
+            id = "openai", label = "ChatGPT (OpenAI)", baseUrl = Config.OPENAI_URL, model = "gpt-6.1-sol",
             extraBody = """{"reasoning_effort":"low","verbosity":"low"}""",
         ),
         Provider(

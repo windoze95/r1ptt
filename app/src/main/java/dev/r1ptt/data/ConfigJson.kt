@@ -21,6 +21,16 @@ object ConfigJson {
             put("sampleRate", c.tts.sampleRate)
             put("instructions", c.tts.instructions)
         })
+        put("live", JSONObject().apply {
+            put("enabled", c.live.enabled)
+            put("url", c.live.url)
+            put("model", c.live.model)
+            put("voice", c.live.voice)
+            put("backendModel", c.live.backendModel)
+            put("reasoningEffort", c.live.reasoningEffort)
+            put("webSearch", c.live.webSearch)
+            put("idleCloseSec", c.live.idleCloseSec)
+        })
         put("power", JSONObject().apply {
             put("wifiIdleMinutes", c.power.wifiIdleMinutes)
             put("screenTimeoutSec", c.power.screenTimeoutSec)
@@ -44,6 +54,7 @@ object ConfigJson {
         }
         val stt = j.optJSONObject("stt")
         val tts = j.optJSONObject("tts")
+        val live = j.optJSONObject("live")
         val power = j.optJSONObject("power")
         return base.copy(
             activeProvider = j.str("activeProvider", base.activeProvider),
@@ -62,6 +73,18 @@ object ConfigJson {
                     instructions = t.str("instructions", base.tts.instructions),
                 )
             } ?: base.tts,
+            live = live?.let { l ->
+                base.live.copy(
+                    enabled = l.bool("enabled", base.live.enabled),
+                    url = l.str("url", base.live.url),
+                    model = l.str("model", base.live.model),
+                    voice = l.str("voice", base.live.voice),
+                    backendModel = l.str("backendModel", base.live.backendModel),
+                    reasoningEffort = l.str("reasoningEffort", base.live.reasoningEffort),
+                    webSearch = l.bool("webSearch", base.live.webSearch),
+                    idleCloseSec = l.int("idleCloseSec", base.live.idleCloseSec),
+                )
+            } ?: base.live,
             power = power?.let { p ->
                 base.power.copy(
                     wifiIdleMinutes = p.int("wifiIdleMinutes", base.power.wifiIdleMinutes),

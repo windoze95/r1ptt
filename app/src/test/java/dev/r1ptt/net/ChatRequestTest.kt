@@ -26,7 +26,7 @@ class ChatRequestTest {
         assertEquals("Bearer sk-test", b.headers["Authorization"])
         assertNull(b.headers["X-Hermes-Session-Id"])
         val body = b.body
-        assertEquals("gpt-5-mini", body.getString("model"))
+        assertEquals("gpt-6.1-sol", body.getString("model"))
         assertTrue(body.getBoolean("stream"))
         assertFalse(body.has("user"))
         assertEquals("low", body.getString("reasoning_effort"))

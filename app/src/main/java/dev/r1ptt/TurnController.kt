@@ -43,6 +43,8 @@ data class TurnState(
     val phase: Phase = Phase.IDLE,
     /** Microphone level 0..1 while listening. */
     val level: Float = 0f,
+    /** What the user said this turn, as transcribed live (speech-to-speech turns). */
+    val heard: String = "",
     /** The reply streamed so far (until it lands in the history). */
     val reply: String = "",
     /** A short status line: errors, "New conversation", agent progress. */
@@ -80,11 +82,15 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     @Volatile var target: DictationTarget? = null
 
-    val busy: Boolean get() = _state.value.phase.active || recorder != null
+    /** Speech-to-speech for voice turns with the keyboard closed (OpenAI provider). */
+    private val live = LiveVoice(app, publish = { _state.value = it }, fail = ::fail, settled = ::settle)
+
+    val busy: Boolean get() = _state.value.phase.active || recorder != null || live.busy
 
     @Volatile private var recorder: Recorder? = null
     @Volatile private var current: Turn? = null
     private var dictating = false
+    private var liveTurn = false
     private var interrupted = false
     private var noteJob: Job? = null
 
@@ -103,10 +109,17 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     override fun onPress(atMs: Long) {
         app.screen.notePress()
-        interrupted = stopActive()
+        val stoppedLive = live.interrupt()
+        interrupted = stopActive() || stoppedLive
         dictating = target?.isActive() == true
+        // Keyboard closed → speech-to-speech (if available); keyboard open → dictation via transcription.
+        liveTurn = !dictating && app.store.value.liveVoice
         app.radio.onActivity()
         app.screen.holdAwake()
+        if (liveTurn) {
+            live.startCapture()
+            return
+        }
         val r = Recorder(clipDir()) { level ->
             _state.update { if (it.phase == Phase.LISTENING || it.phase == Phase.DICTATING) it.copy(level = level) else it }
         }
@@ -115,18 +128,26 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     override fun onHoldStart() {
         val cfg = app.store.value
-        if (recorder == null) {
+        if (if (liveTurn) !live.capturing else recorder == null) {
             fail("Microphone unavailable")
             return
         }
         noteJob?.cancel()
-        _state.value = TurnState(phase = if (dictating) Phase.DICTATING else Phase.LISTENING)
         if (cfg.earcons) Earcon.listening()
-        Http.warm(cfg.stt.baseUrl)
         if (!dictating) HomeActivity.bringToFront(app)
+        if (liveTurn) {
+            live.holdStart()
+            return
+        }
+        _state.value = TurnState(phase = if (dictating) Phase.DICTATING else Phase.LISTENING)
+        Http.warm(cfg.stt.baseUrl)
     }
 
     override fun onHoldEnd() {
+        if (liveTurn) {
+            live.holdEnd()
+            return
+        }
         val r = recorder ?: return settle() // the mic never opened; onHoldStart already said so
         recorder = null
         val clip = r.stop()
@@ -142,6 +163,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     override fun onShortRelease() {
+        if (liveTurn) live.shortRelease(stoppedReply = interrupted)
         recorder?.cancel()
         recorder = null
         settle()
@@ -159,13 +181,15 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     override fun onDoubleTap() {
         interrupted = false
+        live.reset()
         stopActive()
         app.history.newConversation()
         note("New conversation")
     }
 
-    /** A message typed into the launcher's text field. */
+    /** A message typed into the launcher's text field: chat model + text-to-speech. */
     fun sendText(text: String) {
+        live.reset() // the next voice turn starts a fresh session that knows about this exchange
         stopActive()
         app.radio.onActivity()
         app.screen.holdAwake()
@@ -319,7 +343,7 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     /** Lets the CPU sleep again once nothing is recording or in flight. */
     private fun settle() {
-        if (current == null && recorder == null) app.screen.release()
+        if (current == null && recorder == null && !live.busy) app.screen.release()
     }
 
     private fun clipDir() = File(app.cacheDir, "clips")

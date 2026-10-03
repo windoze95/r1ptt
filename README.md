@@ -3,18 +3,19 @@
 Turns a Rabbit R1 into a single-purpose push-to-talk terminal for an AI. Hold the side button and
 talk; on release, it either sends what you said or types it into the text field:
 
-- **Keyboard closed:** your words go to the AI. The reply streams onto the screen and is read
-  aloud, then the screen turns itself off.
-- **Keyboard open:** your words are transcribed into the text field and not sent, so you can edit
-  first.
+- **Keyboard closed:** speech-to-speech. Your voice streams to OpenAI's `gpt-live-1`, which answers in
+  voice (about a second after you let go) and hands real thinking, plus web search, to `gpt-6.1-sol`.
+  The text appears on screen too.
+- **Keyboard open:** your words are transcribed (`gpt-transcribe`) into the text field and not sent,
+  so you can edit first. A tap of the button sends it; `gpt-6.1-sol` answers and the reply is read
+  aloud (`gpt-4o-mini-tts`).
 
 The backends are ChatGPT (an OpenAI API key, the default), **OpenClaw**, **Hermes Agent**, or any
 other OpenAI-compatible server.
 
-> **Status: not yet run on hardware.** The app builds and its unit tests pass. Everything that
-> touches the R1 itself (the button, the audio and the power tuning) is written from community
-> findings and still has to be verified on a device.
-> [docs/INSTALL.md](docs/INSTALL.md) ends with a checklist for doing that.
+> **Status: running on a real R1** (LineageOS 21 on Rabbit's September 2026 kernel). The side button
+> and speech-to-speech voice turns are verified on the device. Dictation and typed replies are built
+> but not yet tried on it, and standby battery drain hasn't been measured ([docs/BATTERY.md](docs/BATTERY.md)).
 
 ## What "firmware" means here
 
@@ -22,7 +23,7 @@ The R1 is an Android 13 phone underneath (MediaTek MT6765). The firmware is four
 
 | Layer | What |
 |---|---|
-| Kernel + vendor | Rabbit's stock v0.8.293. The side button only works with Rabbit's kernel. |
+| Kernel + vendor | Rabbit's own, kept from the R1's last OTA (the side button only works with Rabbit's kernel). |
 | System | LineageOS 21 (Android 14) GSI, with Rabbit's apps removed and the bloat disabled. |
 | Root + tweaks | Magisk, plus the `r1ptt-system` module: button remap, no scanning/location/Bluetooth, faster Doze. |
 | App | `dev.r1ptt`: the launcher, push-to-talk service, speech, chat and power policy. |

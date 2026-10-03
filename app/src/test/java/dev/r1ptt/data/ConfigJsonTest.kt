@@ -21,7 +21,7 @@ class ConfigJsonTest {
     fun partialImportOnlyTouchesWhatItNames() {
         val c = ConfigJson.merge(Config(), JSONObject("""{"providers":{"openai":{"apiKey":"sk-1"}},"power":{"wifiIdleMinutes":0}}"""))
         assertEquals("sk-1", c.providers.getValue("openai").apiKey)
-        assertEquals("gpt-5-mini", c.providers.getValue("openai").model)
+        assertEquals("gpt-6.1-sol", c.providers.getValue("openai").model)
         assertEquals(Config().providers.getValue("hermes"), c.providers.getValue("hermes"))
         assertEquals(0, c.power.wifiIdleMinutes)
         assertEquals(Config().power.screenTimeoutSec, c.power.screenTimeoutSec)
