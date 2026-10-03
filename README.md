@@ -83,5 +83,8 @@ Build: `tools/build.sh` (JDK 17+ and the Android SDK; writes `out/r1ptt.apk` and
 `out/r1ptt-system.zip`).
 Tests: `./gradlew :app:testDebugUnitTest`.
 
-See [NOTICE](NOTICE) for credits. Not affiliated with Rabbit Inc. Flashing can brick a device, and
-unlocking voids the R1's warranty.
+## License
+
+MIT; see [LICENSE](LICENSE). Parts are adapted from ClawPTT (also MIT); [NOTICE](NOTICE) has the
+credits. Not affiliated with Rabbit Inc. Flashing can brick a device, and unlocking voids the R1's
+warranty.
