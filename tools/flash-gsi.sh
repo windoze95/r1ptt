@@ -29,6 +29,12 @@ fastboot getvar unlocked 2>&1 | grep -q 'unlocked: yes' || die "Bootloader is lo
 
 confirm "Flash $(basename "$GSI") over system_a and ERASE all data on the R1?"
 
+# The GSI goes to system_a, so slot a has to be the one that boots. R1s that took OTAs can sit on
+# slot b, and the stock baseline (super) only holds slot-a partitions anyway.
+say "Selecting slot a"
+fastboot --set-active=a || true
+fastboot getvar current-slot 2>&1 | grep -q 'current-slot: a' || die "Couldn't switch to slot a."
+
 say "vbmeta with verification off"
 flash_vbmeta_disabled "$IMG"
 
