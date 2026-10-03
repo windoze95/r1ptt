@@ -36,12 +36,27 @@ stock_dir() {
   dirname "$d"
 }
 
+# Writes a copy of a vbmeta image with verification off and prints its path. This sets the AVB
+# header's flags (big-endian u32 at byte 120) to 3, HASHTREE_DISABLED | VERIFICATION_DISABLED: the
+# same edit `fastboot --disable-verity --disable-verification` makes, done here because some
+# fastboot builds (e.g. 36.0.2) fail it with "Failed to find AVB_MAGIC at offset: 0".
+vbmeta_disabled() {
+  local src=$1 dst
+  dst="$OUT/$(basename "$1" .img)-noverify.img"
+  mkdir -p "$OUT"
+  [ "$(head -c 4 "$src")" = AVB0 ] || die "$src doesn't start with an AVB header"
+  cp "$src" "$dst"
+  printf '\000\000\000\003' | dd of="$dst" bs=1 seek=120 count=4 conv=notrunc 2>/dev/null
+  echo "$dst"
+}
+
 # Flashes vbmeta images with verification off: the R1 only boots a non-Rabbit system this way.
 flash_vbmeta_disabled() {
-  local img=$1 v s
+  local img=$1 v s patched
   for v in vbmeta vbmeta_system vbmeta_vendor; do
+    patched=$(vbmeta_disabled "$img/$v.img")
     for s in a b; do
-      fastboot --disable-verity --disable-verification flash "${v}_$s" "$img/$v.img"
+      fastboot flash "${v}_$s" "$patched"
     done
   done
 }

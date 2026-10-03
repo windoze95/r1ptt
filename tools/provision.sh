@@ -30,12 +30,20 @@ need adb
 PKG=dev.r1ptt
 adb wait-for-device
 
-rootsh() { adb shell "su -c '$*'"; }
+# Root for setup: adbd itself if the build allows it (LineageOS GSIs are userdebug, so no prompt on
+# the R1), otherwise Magisk's su.
+adb root >/dev/null 2>&1 || true
+adb wait-for-device
+if [ "$(adb shell id -u | tr -d '\r')" = 0 ]; then
+  rootsh() { adb shell "$*"; }
+else
+  rootsh() { adb shell "su -c '$*'"; }
+fi
 
 if [ "$UNDO" = 1 ]; then
   say "Re-enabling debloated packages"
   grep -v '^\s*#' "$ROOT/tools/debloat.txt" | awk '{print $1}' | grep . | while read -r p; do
-    adb shell pm enable "$p" >/dev/null 2>&1 && echo "  enabled $p" || true
+    adb shell -n pm enable "$p" >/dev/null 2>&1 && echo "  enabled $p" || true
   done
   exit 0
 fi
@@ -48,6 +56,21 @@ for i in 1 2 3 4 5 6; do
 done
 
 [ -f "$OUT/r1ptt.apk" ] && [ -f "$OUT/r1ptt-system.zip" ] || "$ROOT/tools/build.sh"
+
+# A boot image patched from the command line leaves /data/adb/magisk empty until the Magisk app's
+# "additional setup" runs, and `magisk --install-module` refuses ("Incomplete Magisk install").
+# Do the same file copy from the Magisk APK here.
+if ! rootsh 'test -x /data/adb/magisk/busybox && test -f /data/adb/magisk/util_functions.sh'; then
+  APK=$(find "$ROOT/firmware" -maxdepth 1 -name 'Magisk-*.apk' 2>/dev/null | sort | tail -1)
+  [ -n "$APK" ] || die "Open the Magisk app on the R1 once (it finishes its setup and reboots), then re-run."
+  say "Finishing Magisk's setup from $(basename "$APK")"
+  T=$(mktemp -d)
+  unzip -q -j "$APK" 'assets/*.sh' 'assets/stub.apk' 'lib/arm64-v8a/*' -d "$T"
+  for f in "$T"/lib*.so; do n=$(basename "$f" .so); mv "$f" "$T/${n#lib}"; done
+  adb push "$T/." /data/local/tmp/magiskbin/ >/dev/null
+  rm -rf "$T"
+  rootsh 'mkdir -p /data/adb/modules /data/adb/magisk && chmod 700 /data/adb && cp -af /data/local/tmp/magiskbin/. /data/adb/magisk/ && chown -R 0:0 /data/adb/magisk && chmod -R 755 /data/adb/magisk && rm -rf /data/local/tmp/magiskbin'
+fi
 
 say "Installing the Magisk module (button remap + power defaults)"
 adb push "$OUT/r1ptt-system.zip" /data/local/tmp/r1ptt-system.zip >/dev/null
@@ -78,7 +101,7 @@ if [ "$DEBLOAT" = 1 ]; then
   INSTALLED=$(adb shell pm list packages | tr -d '\r' | sed 's/^package://')
   grep -v '^\s*#' "$ROOT/tools/debloat.txt" | awk '{print $1}' | grep . | while read -r p; do
     if printf '%s\n' "$INSTALLED" | grep -qx "$p"; then
-      adb shell pm disable-user --user 0 "$p" >/dev/null 2>&1 && echo "  disabled $p" || warn "could not disable $p"
+      adb shell -n pm disable-user --user 0 "$p" >/dev/null 2>&1 && echo "  disabled $p" || warn "could not disable $p"
     fi
   done
 fi

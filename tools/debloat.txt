@@ -44,3 +44,6 @@ com.android.dreams.basic
 com.android.dreams.phototable
 com.android.calllogbackup
 com.android.bluetoothmidiservice
+
+# Camera app bundled with this GSI build
+com.google.android.apps.googlecamera.fishfood
