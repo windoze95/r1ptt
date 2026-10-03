@@ -1,0 +1,37 @@
+package dev.r1ptt
+
+import android.app.Application
+import dev.r1ptt.data.BatteryLog
+import dev.r1ptt.data.ConfigStore
+import dev.r1ptt.data.History
+import dev.r1ptt.power.RadioPolicy
+import dev.r1ptt.power.ScreenPolicy
+
+/**
+ * Process-wide singletons. Everything runs in one process: the launcher, the settings screen and
+ * the always-on [PttService] share these instances.
+ */
+class App : Application() {
+    lateinit var store: ConfigStore
+        private set
+    lateinit var history: History
+        private set
+    lateinit var radio: RadioPolicy
+        private set
+    lateinit var screen: ScreenPolicy
+        private set
+    lateinit var battery: BatteryLog
+        private set
+    lateinit var turns: TurnController
+        private set
+
+    override fun onCreate() {
+        super.onCreate()
+        store = ConfigStore(this)
+        history = History(filesDir)
+        radio = RadioPolicy(this, store)
+        screen = ScreenPolicy(this)
+        battery = BatteryLog(filesDir)
+        turns = TurnController(this)
+    }
+}

@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Turns a rooted R1 (LineageOS GSI + Magisk) into the push-to-talk terminal. Safe to re-run, e.g.
+# after changing tools/r1ptt.json or rebuilding the app.
+#
+# Usage: tools/provision.sh [--config tools/r1ptt.json] [--no-debloat] [--undo-debloat] [--density N]
+#
+#   --config        push settings and API keys from a JSON file (see tools/r1ptt.example.json)
+#   --no-debloat    leave the system apps alone
+#   --undo-debloat  re-enable everything in tools/debloat.txt, then stop
+#   --density N     screen density (default 190: comfortable text on the 2.88" screen; 0 = leave)
+set -euo pipefail
+source "$(dirname "$0")/lib.sh"
+
+CONFIG=""
+DEBLOAT=1
+UNDO=0
+DENSITY=190
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --config) CONFIG=$2; shift ;;
+    --no-debloat) DEBLOAT=0 ;;
+    --undo-debloat) UNDO=1 ;;
+    --density) DENSITY=$2; shift ;;
+    *) die "unknown option $1" ;;
+  esac
+  shift
+done
+
+need adb
+PKG=dev.r1ptt
+adb wait-for-device
+
+rootsh() { adb shell "su -c '$*'"; }
+
+if [ "$UNDO" = 1 ]; then
+  say "Re-enabling debloated packages"
+  grep -v '^\s*#' "$ROOT/tools/debloat.txt" | awk '{print $1}' | grep . | while read -r p; do
+    adb shell pm enable "$p" >/dev/null 2>&1 && echo "  enabled $p" || true
+  done
+  exit 0
+fi
+
+say "Checking root (approve the Magisk prompt for Shell on the R1 if one appears)"
+for i in 1 2 3 4 5 6; do
+  rootsh id 2>/dev/null | grep -q 'uid=0' && break
+  [ "$i" = 6 ] && die "No root over adb. Open Magisk → Superuser and allow Shell, then re-run."
+  sleep 5
+done
+
+[ -f "$OUT/r1ptt.apk" ] && [ -f "$OUT/r1ptt-system.zip" ] || "$ROOT/tools/build.sh"
+
+say "Installing the Magisk module (button remap + power defaults)"
+adb push "$OUT/r1ptt-system.zip" /data/local/tmp/r1ptt-system.zip >/dev/null
+rootsh magisk --install-module /data/local/tmp/r1ptt-system.zip
+
+say "Installing the app"
+adb install -r -g "$OUT/r1ptt.apk" >/dev/null
+adb shell appops set "$PKG" SYSTEM_ALERT_WINDOW allow
+
+say "Granting the app root without a prompt"
+APP_UID=$(adb shell pm list packages -U "$PKG" | tr -d '\r' | sed -n "s/^package:$PKG uid:\([0-9]*\).*/\1/p")
+[ -n "$APP_UID" ] || die "Couldn't find the app's uid."
+rootsh "magisk --sqlite \"REPLACE INTO policies (uid,policy,until,logging,notification) VALUES($APP_UID,2,0,1,0)\""
+
+say "Making it the home screen and allowing instant screen-off"
+adb shell cmd package set-home-activity "$PKG/.HomeActivity" >/dev/null
+adb shell dpm set-active-admin --user 0 "$PKG/.sys.AdminReceiver" >/dev/null 2>&1 || true
+adb shell locksettings set-disabled true >/dev/null 2>&1 || warn "Lock screen not disabled (is a PIN set?)"
+
+say "Display defaults"
+adb shell settings put system screen_off_timeout 15000
+adb shell settings put system screen_brightness_mode 0
+adb shell settings put system screen_brightness 60
+[ "$DENSITY" != 0 ] && adb shell wm density "$DENSITY"
+
+if [ "$DEBLOAT" = 1 ]; then
+  say "Disabling unneeded system apps (reversible: --undo-debloat)"
+  INSTALLED=$(adb shell pm list packages | tr -d '\r' | sed 's/^package://')
+  grep -v '^\s*#' "$ROOT/tools/debloat.txt" | awk '{print $1}' | grep . | while read -r p; do
+    if printf '%s\n' "$INSTALLED" | grep -qx "$p"; then
+      adb shell pm disable-user --user 0 "$p" >/dev/null 2>&1 && echo "  disabled $p" || warn "could not disable $p"
+    fi
+  done
+fi
+
+if [ -n "$CONFIG" ]; then
+  [ -f "$CONFIG" ] || die "No such config: $CONFIG"
+  say "Pushing settings and keys from $CONFIG"
+  B64=$(base64 < "$CONFIG" | tr -d '\n')
+  RESULT=$(adb shell am broadcast -n "$PKG/.data.ConfigReceiver" -a dev.r1ptt.CONFIG --es json_b64 "$B64" | tr -d '\r')
+  echo "$RESULT" | grep -q 'data="ok"' || die "Config rejected: $RESULT"
+fi
+
+say "Rebooting to apply the module"
+adb reboot
+say "Done. After it boots: hold the side button and talk."

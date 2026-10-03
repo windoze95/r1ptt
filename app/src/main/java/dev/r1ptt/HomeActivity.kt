@@ -1,0 +1,285 @@
+package dev.r1ptt
+
+import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.AudioManager
+import android.os.Bundle
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
+import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.ScrollView
+import android.widget.TextView
+import dev.r1ptt.data.Config
+import dev.r1ptt.data.History
+import dev.r1ptt.data.Msg
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlin.math.sqrt
+
+/**
+ * The launcher, and the only screen most people will see: status line, conversation, and a text
+ * field. When the keyboard is up, the button dictates into the field instead of sending.
+ */
+class HomeActivity : Activity(), DictationTarget {
+    private val app get() = application as App
+
+    private lateinit var status: TextView
+    private lateinit var meter: ProgressBar
+    private lateinit var scroll: ScrollView
+    private lateinit var list: LinearLayout
+    private lateinit var live: TextView
+    private lateinit var input: EditText
+
+    private var ui: CoroutineScope? = null
+    private var imeVisible = false
+    private var resumed = false
+    private var textSp = 17f
+    private var renderedConv = ""
+    private var lastRendered: Msg? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_home)
+        status = findViewById(R.id.status)
+        meter = findViewById(R.id.meter)
+        scroll = findViewById(R.id.scroll)
+        list = findViewById(R.id.list)
+        live = findViewById(R.id.live)
+        input = findViewById(R.id.input)
+
+        // Lets hideKeyboard() park focus somewhere other than the text field.
+        findViewById<View>(R.id.root).isFocusableInTouchMode = true
+        input.setHorizontallyScrolling(false)
+        input.maxLines = 3
+        input.setOnEditorActionListener { _, action, _ ->
+            if (action == EditorInfo.IME_ACTION_SEND) {
+                sendTyped()
+                true
+            } else false
+        }
+        findViewById<View>(R.id.send).setOnClickListener { if (!sendTyped()) showKeyboard() }
+        findViewById<View>(R.id.settings).setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
+        window.decorView.setOnApplyWindowInsetsListener { v, insets ->
+            val ime = insets.isVisible(WindowInsets.Type.ime())
+            if (ime != imeVisible) {
+                imeVisible = ime
+                render(app.turns.state.value) // the hint differs with the keyboard up
+            }
+            v.onApplyWindowInsets(insets)
+        }
+        app.turns.target = this
+
+        val missing = listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
+            .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumed = true
+        visible = true
+        hideSystemBars()
+        if (hasMic()) PttService.start(this) // the microphone service may only start from the foreground
+        ui = MainScope().also { s ->
+            s.launch { app.store.flow.collect(::applyConfig) }
+            s.launch { app.history.flow.collect(::renderHistory) }
+            s.launch { app.turns.state.collect(::render) }
+        }
+    }
+
+    override fun onPause() {
+        resumed = false
+        visible = false
+        ui?.cancel()
+        ui = null
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        if (app.turns.target === this) app.turns.target = null
+        super.onDestroy()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        if (hasMic()) PttService.start(this) else status.text = getString(R.string.need_mic)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        when (event.keyCode) {
+            // The side button, remapped by the Magisk keylayout. The root reader normally handles
+            // it; this path only matters while that reader is down.
+            KeyEvent.KEYCODE_BUTTON_1 -> {
+                if (event.repeatCount == 0) PttService.instance?.frameworkButton(event.action == KeyEvent.ACTION_DOWN)
+                return true
+            }
+            // The scroll wheel: scroll the conversation, or set the volume while speaking.
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> if (!isActive()) {
+                if (event.action == KeyEvent.ACTION_DOWN) wheel(event.keyCode == KeyEvent.KEYCODE_DPAD_UP)
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        // This is the home screen: Back only closes the keyboard.
+        if (imeVisible) hideKeyboard()
+    }
+
+    // ---- DictationTarget ----
+
+    override fun isActive(): Boolean = resumed && imeVisible && input.hasFocus()
+
+    override fun insert(text: String) {
+        val e = input.text
+        val start = input.selectionStart.coerceAtLeast(0)
+        val end = input.selectionEnd.coerceAtLeast(start)
+        val sep = if (start > 0 && !e[start - 1].isWhitespace()) " " else ""
+        e.replace(start, end, sep + text)
+    }
+
+    override fun sendTyped(): Boolean {
+        val text = input.text.toString().trim()
+        if (text.isEmpty()) return false
+        input.text.clear()
+        hideKeyboard()
+        app.turns.sendText(text)
+        return true
+    }
+
+    override fun hideKeyboard() {
+        getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(input.windowToken, 0)
+        input.clearFocus()
+    }
+
+    private fun showKeyboard() {
+        input.requestFocus()
+        getSystemService(InputMethodManager::class.java).showSoftInput(input, 0)
+    }
+
+    // ---- rendering ----
+
+    private fun render(s: TurnState) {
+        status.setTextColor(getColor(if (s.phase == Phase.ERROR) R.color.error else R.color.accent))
+        status.text = when (s.phase) {
+            Phase.IDLE -> s.note.ifEmpty { idleHint() }
+            Phase.LISTENING -> "Listening… release to send"
+            Phase.DICTATING -> "Dictating… release to insert"
+            Phase.TRANSCRIBING -> "Transcribing…"
+            Phase.THINKING -> s.note.ifEmpty { "Thinking…" }
+            Phase.ANSWERING -> s.note.ifEmpty { app.store.value.provider.label }
+            Phase.SPEAKING -> "Speaking · tap to stop"
+            Phase.ERROR -> s.note
+        }
+        val listening = s.phase == Phase.LISTENING || s.phase == Phase.DICTATING
+        meter.visibility = if (listening) View.VISIBLE else View.INVISIBLE
+        meter.progress = (sqrt(s.level.coerceIn(0f, 1f)) * 160).toInt().coerceAtMost(100)
+        if (s.phase == Phase.THINKING || s.phase == Phase.ANSWERING) {
+            live.visibility = View.VISIBLE
+            live.text = s.reply.ifEmpty { "…" }
+            scrollToEnd()
+        } else {
+            live.visibility = View.GONE
+        }
+        // The screen stays on for a turn; otherwise the short system timeout turns it off.
+        if (s.phase.active) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    private fun idleHint(): String {
+        val cfg = app.store.value
+        return when {
+            cfg.provider.apiKey.isBlank() && cfg.provider.id == "openai" -> getString(R.string.need_key)
+            imeVisible -> "Hold to dictate · tap to send"
+            else -> "Hold the side button to talk"
+        }
+    }
+
+    private fun renderHistory(snap: History.Snapshot) {
+        val msgs = snap.messages
+        val from = msgs.indexOfLast { it === lastRendered }
+        if (snap.convId != renderedConv || from < 0 && lastRendered != null || list.childCount > 150) {
+            list.removeAllViews()
+            renderedConv = snap.convId
+            lastRendered = null
+        }
+        val start = if (lastRendered == null) 0 else msgs.indexOfLast { it === lastRendered } + 1
+        for (m in msgs.drop(start)) list.addView(bubble(m))
+        lastRendered = msgs.lastOrNull()
+        scrollToEnd()
+    }
+
+    private fun bubble(m: Msg) = TextView(this).apply {
+        val user = m.role == Msg.USER
+        text = m.text
+        textSize = textSp
+        setTextColor(getColor(if (user) R.color.dim else R.color.fg))
+        gravity = if (user) Gravity.END else Gravity.START
+        setPadding(if (user) dp(32) else 0, dp(7), if (user) 0 else dp(16), 0)
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+    }
+
+    private fun applyConfig(c: Config) {
+        if (c.textSizeSp.toFloat() == textSp) return
+        textSp = c.textSizeSp.toFloat()
+        live.textSize = textSp
+        for (i in 0 until list.childCount) (list.getChildAt(i) as? TextView)?.textSize = textSp
+    }
+
+    private fun wheel(up: Boolean) {
+        val phase = app.turns.state.value.phase
+        val audible = phase == Phase.SPEAKING || (phase == Phase.ANSWERING && app.store.value.tts.enabled)
+        if (audible) {
+            val am = getSystemService(AudioManager::class.java)
+            am.adjustStreamVolume(AudioManager.STREAM_MUSIC, if (up) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, 0)
+            status.text = "Volume ${am.getStreamVolume(AudioManager.STREAM_MUSIC)}/${am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)}"
+        } else {
+            scroll.smoothScrollBy(0, if (up) -dp(90) else dp(90))
+        }
+    }
+
+    private fun scrollToEnd() {
+        scroll.post { scroll.scrollTo(0, scroll.getChildAt(0).height) }
+    }
+
+    private fun hideSystemBars() {
+        window.insetsController?.let {
+            it.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+            it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    private fun hasMic() = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    companion object {
+        @Volatile
+        private var visible = false
+
+        /** Brings the conversation up when a hold starts somewhere else (e.g. in system Settings). */
+        fun bringToFront(ctx: Context) {
+            if (visible) return
+            runCatching {
+                ctx.startActivity(
+                    Intent(ctx, HomeActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                )
+            }
+        }
+    }
+}

@@ -1,0 +1,5 @@
+# r1ptt: the R1's side button is the power key (mtk-kpd, scancode 116).
+# BUTTON_1 stops it from turning the screen off; WAKE keeps a press turning the screen on even if
+# the app isn't running. The r1ptt app reads the button itself and owns hold / tap / double-tap.
+# The PMIC's hardware long-press power-off is not affected.
+key 116   BUTTON_1   WAKE

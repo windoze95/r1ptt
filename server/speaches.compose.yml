@@ -1,0 +1,13 @@
+# Self-hosted OpenAI-compatible speech-to-text + text-to-speech for the R1 (see speaches.md).
+# For an NVIDIA GPU use the ghcr.io/speaches-ai/speaches:latest-cuda image and add a GPU reservation.
+services:
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    ports:
+      - "8000:8000"
+    volumes:
+      - hf-cache:/home/ubuntu/.cache/huggingface/hub
+    restart: unless-stopped
+
+volumes:
+  hf-cache:

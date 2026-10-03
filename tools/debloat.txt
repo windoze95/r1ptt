@@ -1,0 +1,46 @@
+# System apps provision.sh disables (pm disable-user: reversible with --undo-debloat).
+# Only packages actually installed are touched. Review against the R1's own list first:
+#   adb shell pm list packages -s
+# Never add: com.android.systemui, com.android.settings, com.android.phone, com.android.shell,
+# com.android.inputmethod.latin (the keyboard), *.providers.*, com.android.networkstack*,
+# com.android.permissioncontroller, com.google.android.webview / com.android.webview.
+
+# Launcher (r1ptt is the home screen now)
+com.android.launcher3
+org.lineageos.trebuchet
+
+# Apps nobody will open on a 2.9" push-to-talk device
+org.lineageos.jelly
+org.lineageos.etar
+org.lineageos.eleven
+org.lineageos.recorder
+org.lineageos.aperture
+org.lineageos.glimpse
+org.lineageos.audiofx
+org.lineageos.updater
+com.android.camera2
+com.android.gallery3d
+com.android.contacts
+com.android.dialer
+com.android.messaging
+com.android.email
+com.android.calendar
+com.android.deskclock
+com.android.calculator2
+com.android.music
+com.android.musicfx
+com.android.soundrecorder
+com.android.egg
+com.android.htmlviewer
+com.android.traceur
+
+# Things that wake up in the background
+com.stevesoltys.seedvault
+com.android.printspooler
+com.android.bips
+com.android.wallpaper.livepicker
+com.android.wallpaperbackup
+com.android.dreams.basic
+com.android.dreams.phototable
+com.android.calllogbackup
+com.android.bluetoothmidiservice

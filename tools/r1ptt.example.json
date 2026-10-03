@@ -1,0 +1,23 @@
+{
+  "activeProvider": "openai",
+  "providers": {
+    "openai": {
+      "apiKey": "sk-REPLACE-ME",
+      "model": "gpt-5-mini",
+      "extraBody": { "reasoning_effort": "low", "verbosity": "low" }
+    },
+    "openclaw": {
+      "baseUrl": "http://192.168.1.50:18789/v1",
+      "apiKey": "REPLACE-WITH-GATEWAY-TOKEN",
+      "model": "openclaw/default"
+    },
+    "hermes": {
+      "baseUrl": "http://192.168.1.50:8642/v1",
+      "apiKey": "REPLACE-WITH-API_SERVER_KEY",
+      "model": "hermes-agent"
+    }
+  },
+  "stt": { "baseUrl": "https://api.openai.com/v1", "model": "gpt-4o-mini-transcribe", "language": "en" },
+  "tts": { "enabled": true, "baseUrl": "https://api.openai.com/v1", "model": "gpt-4o-mini-tts", "voice": "marin" },
+  "power": { "wifiIdleMinutes": 3, "screenTimeoutSec": 15, "brightness": 60, "cellular": false }
+}

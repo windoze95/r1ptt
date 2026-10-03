@@ -1,0 +1,62 @@
+# Battery
+
+The R1 has a 1000 mAh battery (about 3.8 Wh). For battery life, what matters is how little the
+device draws while it sits idle; how long each conversation takes matters much less. Some rough
+arithmetic:
+
+- **Screen-on time:** 30 conversations a day at about 20 s each is about 10 minutes of screen at
+  low brightness. That costs roughly 1–2% of the battery.
+- **Idle draw:** an idle current of just 10 mA costs 24% a day. At 3 mA it's about 7% a day.
+
+So the work goes into making idle as close to "everything off" as possible.
+
+## What r1ptt does
+
+| Drain | Approach |
+|---|---|
+| Cellular modem | Kept off permanently (airplane mode set up to leave Wi-Fi alone). `power.cellular: true` turns it back on if a SIM is in. |
+| Wi-Fi | Off after `power.wifiIdleMinutes` (default 3) with the screen dark; on again at the next press or screen-on. Reconnecting takes 1–3 s and overlaps your speaking. |
+| Bluetooth, location, scanning | Off: no Wi-Fi or BLE "always scanning", no Wi-Fi auto-wakeup, no network recommendations. |
+| Background apps | Rabbit's product partition is removed and LineageOS extras are disabled (`tools/debloat.txt`). The app itself has no timers, polling or open connections while idle. |
+| Doze | Enters light idle immediately and deep idle about 30 s after screen-off (module `service.sh`). |
+| Screen | On only while a turn is active, then a 15 s timeout at brightness 60/255. No ambient display or lift/tap-to-wake. |
+| Button | Read by a root `dd` blocked on the input device: zero CPU until a press. The kernel's key interrupt wakes the SoC. |
+| Network per turn | Speech is AAC at 32 kbit/s (about 4 KB per second of talking), encoded while you hold the button. Transcription, chat and speech reuse one HTTP/2 connection, warmed up while you talk. |
+| CPU per turn | No on-device speech models; the cloud (or your server) does the heavy work. |
+
+## Measuring
+
+The app logs battery level at every screen on/off. Those logs bracket the idle periods without
+waking the device to take samples.
+
+1. Charge the R1, then unplug it. USB keeps it awake and charging, which would hide the drain.
+2. Use it normally, or just leave it overnight.
+3. Plug it in and run `tools/battery-report.sh`. It reports:
+   - idle drain per hour, counted only over unplugged screen-off periods of 30 minutes or more;
+   - successful and failed suspends (counts that never move mean the SoC never reached deep
+     sleep);
+   - Android's screen-on and screen-off discharge;
+   - the top kernel and app wakelocks.
+
+For a quick look on the device, go to Settings (gear icon) → Battery.
+
+## Results
+
+To be filled in on hardware. These targets are first guesses, to be adjusted after measuring:
+
+| Setup | Target idle drain | Measured |
+|---|---|---|
+| Wi-Fi cut after 3 min (default) | < 0.5 %/h | |
+| Wi-Fi always on (`wifiIdleMinutes: 0`) | < 1.5 %/h | |
+| Cellular on (`cellular: true`) | — | |
+
+## If idle drain is high
+
+- **`suspend_stats` success never increases:** something is holding a wakelock. Look at the
+  report's kernel wakelock list. On GSIs this is often a vendor service that doesn't match the
+  system.
+  - If it can't be fixed, fall back to rooted stock rabbitOS. Its kernel, vendor and system match;
+    the same module and app work there.
+- **Wi-Fi drains even when idle:** lower `wifiIdleMinutes` to 1.
+- **Drain only after using it:** check that the screen actually turns off (screen timeout in
+  `power.screenTimeoutSec`) and that nothing holds `r1ptt:turn` (`dumpsys power | grep r1ptt`).

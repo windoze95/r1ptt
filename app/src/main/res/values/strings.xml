@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">R1 PTT</string>
+    <string name="settings">Settings</string>
+    <string name="send">Send</string>
+    <string name="hint">Type, or hold the button to dictate</string>
+    <string name="need_mic">Microphone permission is needed</string>
+    <string name="need_key">Add your OpenAI API key in Settings (or run tools/provision.sh)</string>
+</resources>

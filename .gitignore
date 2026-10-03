@@ -1,0 +1,16 @@
+.gradle/
+.kotlin/
+build/
+out/
+local.properties
+.idea/
+*.iml
+.DS_Store
+
+# Your real config holds API keys; only the example is tracked.
+tools/r1ptt.json
+# Downloaded firmware, GSIs and patched boot images.
+firmware/
+*.img
+*.img.gz
+*.img.xz

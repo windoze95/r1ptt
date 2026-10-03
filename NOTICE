@@ -1,0 +1,38 @@
+r1ptt builds on work by others.
+
+- ClawPTT (https://github.com/mthelpme/clawptt) and rabbit-r1-openclaw
+  (https://github.com/mthelpme/rabbit-r1-openclaw): the R1 side-button facts (mtk-kpd scancode
+  116, BUTTON_1 keylayout remap), the root evdev reader approach for presses that wake the screen,
+  and the radio power-saver idea. app/src/main/java/dev/r1ptt/sys/Root.kt is adapted from
+  ClawPTT's Root.kt. Both projects are under the MIT license:
+
+    MIT License
+
+    Copyright (c) 2026 mthelpme
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+- r1_escape (https://github.com/RabbitHoleEscapeR1/r1_escape): the MediaTek preloader FASTBOOT
+  handshake that tools/fastboot-entry.py reimplements.
+- TurboTheTurtle/rabbit-r1-firmware: the R1 partition layout and the stock-baseline flashing
+  sequence.
+- Rabbit Inc.: official developer mode, the WebUSB flash tool, and the stock firmware images.
+- Andy Yan's LineageOS GSI builds, and Magisk by topjohnwu.
+
+Not affiliated with Rabbit Inc., OpenAI, OpenClaw, or Nous Research.
