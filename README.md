@@ -25,7 +25,7 @@ The R1 is an Android 13 phone underneath (MediaTek MT6765). The firmware is four
 |---|---|
 | Kernel + vendor | Rabbit's own, kept from the R1's last OTA (the side button only works with Rabbit's kernel). |
 | System | LineageOS 21 (Android 14) GSI, with Rabbit's apps removed and the bloat disabled. |
-| Root + tweaks | Magisk, plus the `r1ptt-system` module: button remap, no scanning/location/Bluetooth, faster Doze. |
+| Root + tweaks | Magisk, plus the `r1ptt-system` module: button and wheel remaps, Rabbit's USB keyboard/mouse mode off, no scanning/location/Bluetooth, faster Doze. |
 | App | `dev.r1ptt`: the launcher, push-to-talk service, speech, chat and power policy. |
 
 ## Using it
@@ -44,7 +44,7 @@ Tap the text field on the touchscreen to bring up the keyboard. The gear icon op
 Idle time is where a 1000 mAh battery goes.
 
 - **The cellular modem is always off** (airplane mode with Wi-Fi left on). A SIM is optional.
-- **Wi-Fi switches off** after 10 minutes with the screen dark. The next button press turns it back
+- **Wi-Fi switches off** after 3 minutes with the screen dark. The next button press turns it back
   on, and it reconnects while you're still talking.
 - **Nothing runs in the background:**
   - no polling, scanning, location or Bluetooth;

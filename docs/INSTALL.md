@@ -143,7 +143,7 @@ Work through these with the R1 on USB:
 5. **Taps.** A tap with the screen on turns it off. A tap while it's talking stops it. A double-tap
    shows "New conversation".
 6. **Scroll wheel.** It changes the volume (a slider appears), in any screen state.
-7. **Wi-Fi cut.** After 10 minutes with the screen off, `adb shell cmd wifi status` shows Wi-Fi
+7. **Wi-Fi cut.** After 3 minutes with the screen off, `adb shell cmd wifi status` shows Wi-Fi
    disabled. The next hold shows "Connecting to Wi-Fi…" and then works. `tools/wifi-wake-test.sh`
    times how long that reconnect takes.
 8. **Battery.** Unplug the R1 overnight, then plug it in and run `tools/battery-report.sh`. See
@@ -158,6 +158,13 @@ Work through these with the R1 on USB:
    it has another name, set `"buttonDevice"` in the config.
 3. Run `adb shell dumpsys input | grep -A4 mtk-kpd`. `KeyLayoutFile` should be our `mtk-kpd.kl`.
    The module's own log is `/data/adb/modules/r1ptt_system/service.log`.
+
+**It's sluggish, USB drops out after a replug, or Android keeps restarting.** Rabbit's vendor
+runs the R1's USB in "CUA" mode, which adds a USB keyboard, mouse and WebUSB device for rabbitOS's
+computer-use feature. On LineageOS that mode never comes up, and init and Android fight over the USB
+config: 20-second stalls, the system process killed by its watchdog, and no adb after a replug. The
+module's `system.prop` turns it off (`ro.vendor.cua.enable=0`). Check with
+`adb shell getprop ro.vendor.cua.enable` (should be 0); the R1 should connect as `0e8d:201c`, not `0e8d:2303`.
 
 **It boot-loops after installing the module.**
 There are no volume keys, so Magisk's safe-mode combo is unavailable. Instead, while it loops, run:

@@ -15,7 +15,7 @@ So the work goes into making idle as close to "everything off" as possible.
 | Drain | Approach |
 |---|---|
 | Cellular modem | Kept off permanently (airplane mode set up to leave Wi-Fi alone). `power.cellular: true` turns it back on if a SIM is in. |
-| Wi-Fi | Off after `power.wifiIdleMinutes` (default 10) with the screen dark; on again at the next press or screen-on. Reconnecting can take several seconds on the R1 (time it with `tools/wifi-wake-test.sh`); the screen shows "Connecting to Wi-Fi…" meanwhile, and your words are buffered, not lost. |
+| Wi-Fi | Off after `power.wifiIdleMinutes` (default 3) with the screen dark; on again at the next press or screen-on. Reconnecting takes about 1.2 s on the R1 (`tools/wifi-wake-test.sh`), overlapping your speaking; if it ever takes longer, the screen shows "Connecting to Wi-Fi…" and your words are buffered, not lost. |
 | Bluetooth, location, scanning | Off: no Wi-Fi or BLE "always scanning", no Wi-Fi auto-wakeup, no network recommendations. |
 | Background apps | Rabbit's product partition is removed and LineageOS extras are disabled (`tools/debloat.txt`). The app itself has no timers, polling or open connections while idle. |
 | Doze | Enters light idle immediately and deep idle about 30 s after screen-off (module `service.sh`). |
@@ -46,7 +46,7 @@ To be filled in on hardware. These targets are first guesses, to be adjusted aft
 
 | Setup | Target idle drain | Measured |
 |---|---|---|
-| Wi-Fi cut after 10 min (default) | < 0.5 %/h | |
+| Wi-Fi cut after 3 min (default) | < 0.5 %/h | |
 | Wi-Fi always on (`wifiIdleMinutes: 0`) | < 1.5 %/h | |
 | Cellular on (`cellular: true`) | — | |
 

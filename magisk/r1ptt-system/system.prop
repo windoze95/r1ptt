@@ -1,0 +1,6 @@
+# Rabbit's vendor makes the R1 also show up on a connected computer as a USB keyboard, mouse and
+# WebUSB device, for rabbitOS's "computer use" (CUA) feature. On LineageOS those functions never come
+# up: init waits 20 s for them on every USB state change, Android and the vendor script keep
+# overriding each other's USB mode (sys.usb.state "adb" vs "adb,cua"), USB data can stay dead after a
+# replug, and system_server gets killed by its watchdog. Plain ADB mode only.
+ro.vendor.cua.enable=0
