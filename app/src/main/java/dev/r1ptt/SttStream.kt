@@ -94,6 +94,7 @@ class SttStream(
         mic.stop()
         synchronized(lock) { streaming = false }
         transcriber?.send(TranscribeProtocol.COMMIT)
+        val released = SystemClock.elapsedRealtime()
         val text = try {
             withTimeoutOrNull(FINAL_WAIT_MS) { result.await() }
         } catch (e: CancellationException) {
@@ -102,6 +103,7 @@ class SttStream(
             null
         }
         if (text == null) cancel() // the recording is kept for the fallback
+        else Log.i(TAG, "stt: final transcript ${SystemClock.elapsedRealtime() - released} ms after release (${durationMs} ms of audio)")
         return text
     }
 

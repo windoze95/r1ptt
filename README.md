@@ -14,9 +14,10 @@ talk; on release, it either sends what you said or types it into the text field:
 The backends are ChatGPT (an OpenAI API key, the default), **OpenClaw**, **Hermes Agent**, or any
 other OpenAI-compatible server.
 
-> **Status: running on a real R1** (LineageOS 21 on Rabbit's September 2026 kernel). The side button
-> and speech-to-speech voice turns are verified on the device. Dictation and typed replies are built
-> but not yet tried on it, and standby battery drain hasn't been measured ([docs/BATTERY.md](docs/BATTERY.md)).
+> **Status: running on a real R1** (LineageOS 21 on Rabbit's September 2026 kernel). The side button,
+> speech-to-speech voice turns and live dictation are verified on the device (final text ~0.4 s after
+> release). Typed replies are built but not yet tried on it, and standby battery drain hasn't been
+> measured ([docs/BATTERY.md](docs/BATTERY.md)).
 
 ## What "firmware" means here
 
