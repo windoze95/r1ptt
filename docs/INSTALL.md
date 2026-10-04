@@ -138,8 +138,8 @@ Work through these with the R1 on USB:
 3. **The press that wakes the screen.** Let the screen go off and wait a minute (or run
    `adb shell dumpsys deviceidle force-idle`). Then hold the button and speak right away: nothing
    you said should be lost.
-4. **Dictation.** Tap the text field so the keyboard opens. Hold, speak and release: the text lands
-   at the cursor and nothing is sent. A tap of the button sends it, and the reply is read aloud.
+4. **Dictation.** Tap the text field so the keyboard opens. Hold and speak: the words appear dimmed
+   at the cursor as you talk, and on release they turn into the final text. Nothing is sent. A tap of the button sends it, and the reply is read aloud.
 5. **Taps.** A tap with the screen on turns it off. A tap while it's talking stops it. A double-tap
    shows "New conversation".
 6. **Scroll wheel.** It changes the volume (a slider appears), in any screen state.

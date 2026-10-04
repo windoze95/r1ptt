@@ -17,7 +17,7 @@
       "model": "hermes-agent"
     }
   },
-  "stt": { "baseUrl": "https://api.openai.com/v1", "model": "gpt-transcribe", "language": "en" },
+  "stt": { "baseUrl": "https://api.openai.com/v1", "model": "gpt-transcribe", "language": "en", "live": true, "liveModel": "gpt-live-transcribe" },
   "tts": { "enabled": true, "baseUrl": "https://api.openai.com/v1", "model": "gpt-4o-mini-tts-2025-12-15", "voice": "marin" },
   "power": { "wifiIdleMinutes": 3, "screenTimeoutSec": 15, "brightness": 60, "cellular": false }
 }

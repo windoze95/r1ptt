@@ -93,6 +93,13 @@ data class Config(
     val stt: Endpoint = Endpoint(OPENAI_URL, model = "gpt-transcribe"),
     /** ISO-639-1 language hint for transcription; blank = auto-detect. */
     val sttLanguage: String = "",
+    /** Stream push-to-talk transcription (gpt-live-transcribe) while the button is held: words appear as you
+     *  speak and the final text is ready ~0.5 s after release. Only used when transcription is on OpenAI. */
+    val sttLive: Boolean = true,
+    val sttLiveModel: String = "gpt-live-transcribe",
+    val sttLiveUrl: String = "wss://api.openai.com/v1/realtime?intent=transcription",
+    /** Live transcript latency vs stability: minimal, low, medium, high or xhigh. */
+    val sttDelay: String = "low",
     val tts: Tts = Tts(),
     val live: Live = Live(),
     val power: Power = Power(),
@@ -110,6 +117,9 @@ data class Config(
     val liveVoice: Boolean get() = live.enabled && provider.id == "openai" && keyFor(liveEndpoint).isNotBlank()
 
     val liveEndpoint: Endpoint get() = Endpoint(live.url, model = live.model)
+
+    /** Dictation (and agent voice turns) stream through gpt-live-transcribe when transcription is on OpenAI. */
+    val liveStt: Boolean get() = sttLive && hostOf(stt.baseUrl) == "api.openai.com" && keyFor(stt).isNotBlank()
 
     /** The key for [endpoint]: its own if set, else the key of a provider on the same host. */
     fun keyFor(endpoint: Endpoint): String {

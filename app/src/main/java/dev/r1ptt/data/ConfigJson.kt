@@ -13,7 +13,8 @@ object ConfigJson {
         put("providers", JSONObject().apply { c.providers.forEach { (id, p) -> put(id, provider(p)) } })
         put("systemPrompt", c.systemPrompt)
         put("historyMessages", c.historyMessages)
-        put("stt", endpoint(c.stt).put("language", c.sttLanguage))
+        put("stt", endpoint(c.stt).put("language", c.sttLanguage).put("live", c.sttLive).put("liveModel", c.sttLiveModel)
+            .put("liveUrl", c.sttLiveUrl).put("delay", c.sttDelay))
         put("tts", endpoint(c.tts.endpoint).apply {
             put("enabled", c.tts.enabled)
             put("voice", c.tts.voice)
@@ -64,6 +65,10 @@ object ConfigJson {
             historyMessages = j.int("historyMessages", base.historyMessages),
             stt = stt?.let { mergeEndpoint(base.stt, it) } ?: base.stt,
             sttLanguage = stt?.str("language", base.sttLanguage) ?: base.sttLanguage,
+            sttLive = stt?.bool("live", base.sttLive) ?: base.sttLive,
+            sttLiveModel = stt?.str("liveModel", base.sttLiveModel) ?: base.sttLiveModel,
+            sttLiveUrl = stt?.str("liveUrl", base.sttLiveUrl) ?: base.sttLiveUrl,
+            sttDelay = stt?.str("delay", base.sttDelay) ?: base.sttDelay,
             tts = tts?.let { t ->
                 base.tts.copy(
                     enabled = t.bool("enabled", base.tts.enabled),

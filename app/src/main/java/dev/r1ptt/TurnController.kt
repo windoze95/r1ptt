@@ -43,7 +43,7 @@ data class TurnState(
     val phase: Phase = Phase.IDLE,
     /** Microphone level 0..1 while listening. */
     val level: Float = 0f,
-    /** What the user said this turn, as transcribed live (speech-to-speech turns). */
+    /** What the user said this turn, as transcribed live (voice turns). */
     val heard: String = "",
     /** The reply streamed so far (until it lands in the history). */
     val reply: String = "",
@@ -54,7 +54,18 @@ data class TurnState(
 /** The launcher's text field while the keyboard is up: where dictation goes. */
 interface DictationTarget {
     fun isActive(): Boolean
+
+    /** Provisional words from live transcription, shown in place at the cursor until [insert]. */
+    fun showPartial(text: String)
+
+    /** Final text: replaces the provisional words, or goes in at the cursor. */
     fun insert(text: String)
+
+    /** Drops the provisional words (nothing was said after all). */
+    fun clearPartial()
+
+    /** Keeps the provisional words as typed text (the dictation was interrupted or failed). */
+    fun keepPartial()
 
     /** A tap while typing sends the field's text; false if it was empty. */
     fun sendTyped(): Boolean
@@ -85,12 +96,15 @@ class TurnController(private val app: App) : Gestures.Listener {
     /** Speech-to-speech for voice turns with the keyboard closed (OpenAI provider). */
     private val live = LiveVoice(app, publish = { _state.value = it }, fail = ::fail, settled = ::settle)
 
-    val busy: Boolean get() = _state.value.phase.active || recorder != null || live.busy
+    val busy: Boolean get() = _state.value.phase.active || recorder != null || stream != null || live.busy
 
     @Volatile private var recorder: Recorder? = null
+    /** Live transcription for this press (gpt-live-transcribe), when transcription is on OpenAI. */
+    @Volatile private var stream: SttStream? = null
     @Volatile private var current: Turn? = null
     private var dictating = false
     private var liveTurn = false
+    private var streamTurn = false
     private var interrupted = false
     private var noteJob: Job? = null
 
@@ -112,13 +126,23 @@ class TurnController(private val app: App) : Gestures.Listener {
         val stoppedLive = live.interrupt()
         interrupted = stopActive() || stoppedLive
         dictating = target?.isActive() == true
+        val cfg = app.store.value
         // Keyboard closed → speech-to-speech (if available); keyboard open → dictation via transcription.
-        liveTurn = !dictating && app.store.value.liveVoice
+        liveTurn = !dictating && cfg.liveVoice
+        // Dictation (and agent voice turns) stream through live transcription when it's on OpenAI.
+        streamTurn = !liveTurn && cfg.liveStt
         app.radio.onActivity()
         app.screen.holdAwake()
         if (liveTurn) {
             live.startCapture()
             live.warm() // connect now, not once the hold is confirmed
+            return
+        }
+        if (streamTurn) {
+            val s = SttStream(app, onPartial = ::partial) { level ->
+                _state.update { if (it.phase == Phase.LISTENING || it.phase == Phase.DICTATING) it.copy(level = level) else it }
+            }
+            stream = if (s.start()) s else null // connects now; nothing is sent unless it becomes a hold
             return
         }
         val r = Recorder(clipDir()) { level ->
@@ -129,7 +153,12 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     override fun onHoldStart() {
         val cfg = app.store.value
-        if (if (liveTurn) !live.capturing else recorder == null) {
+        val micMissing = when {
+            liveTurn -> !live.capturing
+            streamTurn -> stream == null
+            else -> recorder == null
+        }
+        if (micMissing) {
             fail("Microphone unavailable")
             return
         }
@@ -141,12 +170,25 @@ class TurnController(private val app: App) : Gestures.Listener {
             return
         }
         _state.value = TurnState(phase = if (dictating) Phase.DICTATING else Phase.LISTENING)
-        Http.warm(cfg.stt.baseUrl)
+        if (streamTurn) stream?.hold() else Http.warm(cfg.stt.baseUrl)
     }
 
     override fun onHoldEnd() {
         if (liveTurn) {
             live.holdEnd()
+            return
+        }
+        if (streamTurn) {
+            val s = stream ?: return settle() // the mic never opened; onHoldStart already said so
+            stream = null
+            if (s.durationMs < MIN_CLIP_MS || s.peak < SILENCE) {
+                s.cancel()
+                target?.clearPartial()
+                note("Didn't hear anything")
+            } else {
+                launch { turn -> transcribeStream(turn, s) }
+            }
+            settle()
             return
         }
         val r = recorder ?: return settle() // the mic never opened; onHoldStart already said so
@@ -165,6 +207,8 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     override fun onShortRelease() {
         if (liveTurn) live.shortRelease(stoppedReply = interrupted)
+        stream?.cancel()
+        stream = null
         recorder?.cancel()
         recorder = null
         settle()
@@ -238,17 +282,58 @@ class TurnController(private val app: App) : Gestures.Listener {
         } finally {
             discard(clip)
         }
-        if (text.isBlank()) {
+        handleTranscript(turn, text)
+    }
+
+    /** Live-transcribed press: the final text is usually ready ~0.5 s after release. */
+    private suspend fun transcribeStream(turn: Turn, s: SttStream) {
+        val cfg = app.store.value
+        _state.update { it.copy(phase = Phase.TRANSCRIBING, level = 0f) }
+        try {
+            val text = s.finish() ?: run {
+                // The live session failed (network, server): transcribe the recording instead.
+                Log.w(TAG, "live transcription unavailable; transcribing the recording")
+                val clip = s.recording(clipDir())
+                try {
+                    awaitNetwork()
+                    io { calls -> stt.transcribe(cfg, clip, calls) }
+                } finally {
+                    discard(clip)
+                }
+            }
+            handleTranscript(turn, text)
+        } finally {
+            s.cancel()
+            target?.keepPartial() // interrupted or failed: the words shown so far stay
+        }
+    }
+
+    /** Dictation goes into the text field; anything else is a question for the backend. */
+    private suspend fun handleTranscript(turn: Turn, transcript: String) {
+        val text = transcript.trim()
+        val t = target
+        if (text.isEmpty()) {
+            t?.clearPartial()
             note("Didn't catch that")
             return
         }
-        val t = target
         if (dictating && t != null) {
             t.insert(text)
             idle()
             return
         }
         ask(turn, text)
+    }
+
+    /** Words so far from live transcription: in the text field when dictating, else on screen. */
+    private fun partial(text: String) {
+        if (dictating) {
+            target?.showPartial(text)
+        } else {
+            _state.update {
+                if (it.phase == Phase.LISTENING || it.phase == Phase.TRANSCRIBING) it.copy(heard = text) else it
+            }
+        }
     }
 
     private suspend fun ask(turn: Turn, text: String) {
@@ -324,6 +409,9 @@ class TurnController(private val app: App) : Gestures.Listener {
         t?.job?.cancel()
         recorder?.cancel()
         recorder = null
+        stream?.cancel()
+        stream = null
+        target?.keepPartial() // a dictation cut short keeps the words already shown
         if (wasActive) _state.value = TurnState()
         return wasActive
     }
@@ -355,7 +443,7 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     /** Lets the CPU sleep again once nothing is recording or in flight. */
     private fun settle() {
-        if (current == null && recorder == null && !live.busy) app.screen.release()
+        if (current == null && recorder == null && stream == null && !live.busy) app.screen.release()
     }
 
     private fun clipDir() = File(app.cacheDir, "clips")

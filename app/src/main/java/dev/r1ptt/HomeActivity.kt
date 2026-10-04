@@ -7,7 +7,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Bundle
+import android.text.Editable
 import android.text.SpannableStringBuilder
+import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.KeyEvent
@@ -51,6 +53,8 @@ class HomeActivity : Activity(), DictationTarget {
     private var textSp = 17f
     private var renderedConv = ""
     private var lastRendered: Msg? = null
+    /** Marks live dictation's provisional words in the text field (dim until the final transcript). */
+    private val provisional by lazy { ForegroundColorSpan(getColor(R.color.dim)) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -154,12 +158,46 @@ class HomeActivity : Activity(), DictationTarget {
 
     override fun isActive(): Boolean = resumed && imeVisible && input.hasFocus()
 
+    override fun showPartial(text: String) {
+        if (text.isEmpty()) return
+        val start = put(text)
+        input.text.setSpan(provisional, start, input.selectionEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
+
     override fun insert(text: String) {
+        put(text)
+    }
+
+    override fun clearPartial() {
         val e = input.text
-        val start = input.selectionStart.coerceAtLeast(0)
-        val end = input.selectionEnd.coerceAtLeast(start)
+        val start = e.getSpanStart(provisional)
+        if (start < 0) return
+        val end = e.getSpanEnd(provisional)
+        e.removeSpan(provisional)
+        e.delete(start, end)
+    }
+
+    override fun keepPartial() {
+        input.text.removeSpan(provisional)
+    }
+
+    /**
+     * Writes [text] over the provisional words, or at the cursor if there are none, with a space
+     * before it if needed; leaves the cursor after it. Returns where the text (and space) starts.
+     */
+    private fun put(text: String): Int {
+        val e: Editable = input.text
+        var start = e.getSpanStart(provisional)
+        var end = e.getSpanEnd(provisional)
+        e.removeSpan(provisional)
+        if (start < 0) {
+            start = input.selectionStart.coerceAtLeast(0)
+            end = input.selectionEnd.coerceAtLeast(start)
+        }
         val sep = if (start > 0 && !e[start - 1].isWhitespace()) " " else ""
         e.replace(start, end, sep + text)
+        input.setSelection(start + sep.length + text.length)
+        return start
     }
 
     override fun sendTyped(): Boolean {
@@ -198,7 +236,7 @@ class HomeActivity : Activity(), DictationTarget {
         val listening = s.phase == Phase.LISTENING || s.phase == Phase.DICTATING
         meter.visibility = if (listening) View.VISIBLE else View.INVISIBLE
         meter.progress = (sqrt(s.level.coerceIn(0f, 1f)) * 160).toInt().coerceAtMost(100)
-        // The exchange in progress: what was heard (speech-to-speech turns) and the reply so far.
+        // The exchange in progress: what was heard (live transcription) and the reply so far.
         val showLive = s.phase == Phase.THINKING || s.phase == Phase.ANSWERING ||
             (s.phase.active && (s.heard.isNotEmpty() || s.reply.isNotEmpty()))
         if (showLive) {

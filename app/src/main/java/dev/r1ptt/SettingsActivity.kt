@@ -38,6 +38,7 @@ class SettingsActivity : Activity() {
     private lateinit var voice: EditText
     private lateinit var sttUrl: EditText
     private lateinit var sttModel: EditText
+    private lateinit var sttLiveOn: Switch
     private lateinit var ttsUrl: EditText
     private lateinit var ttsModel: EditText
     private lateinit var liveOn: Switch
@@ -89,6 +90,7 @@ class SettingsActivity : Activity() {
         voice = field("Voice", cfg.tts.voice)
         sttUrl = field("Speech-to-text URL", cfg.stt.baseUrl)
         sttModel = field("Speech-to-text model", cfg.stt.model)
+        sttLiveOn = switch("Show words as you speak (${cfg.sttLiveModel}, OpenAI)", cfg.sttLive)
         ttsUrl = field("Text-to-speech URL", cfg.tts.endpoint.baseUrl)
         ttsModel = field("Text-to-speech model", cfg.tts.endpoint.model)
 
@@ -149,6 +151,7 @@ class SettingsActivity : Activity() {
         }
         cfg = cfg.copy(
             stt = cfg.stt.copy(baseUrl = sttUrl.text.toString().trim(), model = sttModel.text.toString().trim()),
+            sttLive = sttLiveOn.isChecked,
             tts = cfg.tts.copy(
                 enabled = speak.isChecked,
                 voice = voice.text.toString().trim(),

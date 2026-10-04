@@ -7,9 +7,9 @@ talk; on release, it either sends what you said or types it into the text field:
   voice (about a second after you let go) and hands real thinking, plus web search, to `gpt-6.1-sol`.
   The text appears on screen too. The voice session opens as soon as the screen wakes and closes when it
   goes dark; OpenAI bills it by the second while it's open (about $0.05 a minute).
-- **Keyboard open:** your words are transcribed (`gpt-transcribe`) into the text field and not sent,
-  so you can edit first. A tap of the button sends it; `gpt-6.1-sol` answers and the reply is read
-  aloud (`gpt-4o-mini-tts`).
+- **Keyboard open:** dictation. Your words appear in the text field as you speak
+  (`gpt-live-transcribe`), dimmed until you let go, and nothing is sent, so you can edit first.
+  A tap of the button sends it; `gpt-6.1-sol` answers and the reply is read aloud (`gpt-4o-mini-tts`).
 
 The backends are ChatGPT (an OpenAI API key, the default), **OpenClaw**, **Hermes Agent**, or any
 other OpenAI-compatible server.
