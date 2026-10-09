@@ -1,0 +1,90 @@
+name: Signed app release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: robotos-releases
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.repository == 'windoze95/robotOS' && vars.ROBOTOS_RELEASES_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate main ancestry and increasing release version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate --slurp 'repos/windoze95/robotOS/releases?per_page=100' > "$RUNNER_TEMP/releases.json"
+          node tools/release/preflight.mjs "$RUNNER_TEMP/releases.json"
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Validate without release secrets
+        run: |
+          node --test tools/acceptance.test.mjs tools/release/*.test.mjs
+          ./gradlew --no-daemon --console=plain :app:testDebugUnitTest :app:assembleRelease :app:lintDebug
+  publish:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # The owner must configure reviewers/tag restrictions before enabling releases.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Recheck release ordering after environment approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate --slurp 'repos/windoze95/robotOS/releases?per_page=100' > "$RUNNER_TEMP/releases.json"
+          node tools/release/preflight.mjs "$RUNNER_TEMP/releases.json"
+      - name: Build with the approved stable signer
+        env:
+          ROBOTOS_KEYSTORE_BASE64: ${{ secrets.ROBOTOS_KEYSTORE_BASE64 }}
+          ROBOTOS_STORE_PASSWORD: ${{ secrets.ROBOTOS_STORE_PASSWORD }}
+          ROBOTOS_KEY_ALIAS: ${{ secrets.ROBOTOS_KEY_ALIAS }}
+          ROBOTOS_KEY_PASSWORD: ${{ secrets.ROBOTOS_KEY_PASSWORD }}
+          ROBOTOS_SIGNER_SHA256: ${{ vars.ROBOTOS_SIGNER_SHA256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$ROBOTOS_KEYSTORE_BASE64"
+          secret_dir=$(mktemp -d "$RUNNER_TEMP/robotos-signing.XXXXXX")
+          trap 'rm -rf "$secret_dir"' EXIT
+          export ROBOTOS_KEYSTORE_PATH="$secret_dir/keystore"
+          printf '%s' "$ROBOTOS_KEYSTORE_BASE64" | base64 --decode > "$ROBOTOS_KEYSTORE_PATH"
+          unset ROBOTOS_KEYSTORE_BASE64
+          bash tools/release/build-release.sh "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUNNER_TEMP/robotos-release"
+      - name: Publish the complete app-only release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.txt"
+          gh api --paginate --slurp 'repos/windoze95/robotOS/releases?per_page=100' > "$RUNNER_TEMP/releases.json"
+          node tools/release/preflight.mjs "$RUNNER_TEMP/releases.json"
+          printf 'robotOS %s\n\nApp update only. Keeps dev.r1ptt and its data. No OS or Magisk updates.\n\nSource commit: %s\n' "${GITHUB_REF_NAME#v}" "$GITHUB_SHA" > "$notes"
+          gh release create "$GITHUB_REF_NAME" --repo windoze95/robotOS --verify-tag --draft --title "robotOS ${GITHUB_REF_NAME#v}" --notes-file "$notes"
+          gh release upload "$GITHUB_REF_NAME" --repo windoze95/robotOS "$RUNNER_TEMP/robotos-release/robotOS.apk" "$RUNNER_TEMP/robotos-release/update.json" "$RUNNER_TEMP/robotos-release/signer.cer" "$RUNNER_TEMP/robotos-release/SHA256SUMS"
+          gh release edit "$GITHUB_REF_NAME" --repo windoze95/robotOS --draft=false --latest
+      - name: Remove local release outputs
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/robotos-release"
