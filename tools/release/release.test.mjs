@@ -36,10 +36,18 @@ test('manifest binds package, signer, size, checksum, version and commit', () =>
   assert.throws(() => payloadFor('v0.2.0', commit, Buffer.alloc(0), facts, cert));
 });
 test('APK inspection requires a sole verified signer and complete identity', () => {
-  const badging = "package: name='dev.r1ptt' versionCode='2000' versionName='0.2.0'\nsdkVersion:'33'\n";
+  const badging = "package: name='dev.r1ptt' versionCode='2000' versionName='0.2.0' platformBuildVersionName='15' platformBuildVersionCode='35' compileSdkVersion='35' compileSdkVersionCodename='15'\nminSdkVersion:'33'\ntargetSdkVersion:'34'\n";
   const signing = `Signer #1 certificate SHA-256 digest: ${cert}\n`;
   assert.deepEqual(apkFacts(badging, signing), facts);
+  assert.deepEqual(apkFacts(badging.replace('minSdkVersion:', 'sdkVersion:'), signing), facts);
   assert.throws(() => apkFacts(badging, `${signing}Signer #2 certificate SHA-256 digest: ${cert}\n`));
   assert.throws(() => apkFacts(badging, 'not signed'));
   assert.throws(() => apkFacts('', signing));
+});
+test('APK inspection rejects missing, malformed and ambiguous minimum SDK metadata', () => {
+  const pkg = "package: name='dev.r1ptt' versionCode='2000' versionName='0.2.0'\n";
+  const signing = `Signer #1 certificate SHA-256 digest: ${cert}\n`;
+  for (const sdk of ["targetSdkVersion:'34'\n", "minSdkVersion:'unknown'\n",
+    "minSdkVersion:'33'\nsdkVersion:'33'\n", "minSdkVersion:'33'\nminSdkVersion:'34'\n"])
+    assert.throws(() => apkFacts(pkg + sdk, signing));
 });

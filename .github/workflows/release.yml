@@ -34,6 +34,7 @@ jobs:
         run: |
           node --test tools/acceptance.test.mjs tools/release/*.test.mjs
           ./gradlew --no-daemon --console=plain :app:testDebugUnitTest :app:assembleRelease :app:lintDebug
+          node tools/release/manifest.mjs inspect app/build/outputs/apk/release/app-release.apk
   publish:
     needs: validate
     runs-on: ubuntu-24.04

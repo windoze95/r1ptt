@@ -8,10 +8,20 @@ import { releaseVersion } from './version.mjs';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 export function apkFacts(badging, signing) {
   const pkg = /^package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'/m.exec(badging);
-  const sdk = /^sdkVersion:'(\d+)'$/m.exec(badging);
+  // Build Tools 35 aapt2 calls this minSdkVersion; older badging uses sdkVersion.
+  const sdks = [...badging.matchAll(/^(?:minSdkVersion|sdkVersion):'(\d+)'$/gm)];
   const certs = [...signing.matchAll(/^Signer #\d+ certificate SHA-256 digest: ([0-9a-f]{64})$/gm)];
-  if (!pkg || !sdk || certs.length !== 1) throw new Error('APK must have one verified signer and complete package metadata.');
-  return { packageName: pkg[1], versionCode: Number(pkg[2]), versionName: pkg[3], minSdk: Number(sdk[1]), certificateSha256: certs[0][1] };
+  if (!pkg || sdks.length !== 1 || certs.length !== 1) throw new Error('APK must have one verified signer and complete package metadata.');
+  return { packageName: pkg[1], versionCode: Number(pkg[2]), versionName: pkg[3], minSdk: Number(sdks[0][1]), certificateSha256: certs[0][1] };
+}
+
+export function inspectApk(apkPath) {
+  const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT;
+  if (!sdk) throw new Error('ANDROID_HOME is required.');
+  const buildTools = path.join(sdk, 'build-tools/35.0.0');
+  const badging = execFileSync(path.join(buildTools, 'aapt2'), ['dump', 'badging', apkPath], { encoding: 'utf8' });
+  const signing = execFileSync(path.join(buildTools, 'apksigner'), ['verify', '--verbose', '--print-certs', apkPath], { encoding: 'utf8' });
+  return apkFacts(badging, signing);
 }
 
 export function payloadFor(tag, commitSha, apk, facts, expectedCertificate) {
@@ -56,16 +66,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const fingerprint = process.env.ROBOTOS_SIGNER_SHA256;
     if (mode === 'create') {
       const apkPath = path.join(directory, 'robotOS.apk');
-      const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT;
-      if (!sdk) throw new Error('ANDROID_HOME is required.');
-      const buildTools = path.join(sdk, 'build-tools/35.0.0');
-      const badging = execFileSync(path.join(buildTools, 'aapt2'), ['dump', 'badging', apkPath], { encoding: 'utf8' });
-      const signing = execFileSync(path.join(buildTools, 'apksigner'), ['verify', '--verbose', '--print-certs', apkPath], { encoding: 'utf8' });
-      const payload = payloadFor(tag, commit, fs.readFileSync(apkPath), apkFacts(badging, signing), fingerprint);
+      const payload = payloadFor(tag, commit, fs.readFileSync(apkPath), inspectApk(apkPath), fingerprint);
       fs.writeFileSync(path.join(directory, 'payload.json'), JSON.stringify(payload) + '\n');
+    } else if (mode === 'inspect') {
+      // Exercise real SDK output on a CI-built APK without release credentials.
+      console.log(JSON.stringify(inspectApk(directory)));
     } else if (mode === 'verify') {
       const manifest = verifyBundle(directory, fingerprint);
       console.log(`Verified signed metadata and APK checksum for ${manifest.tag}.`);
-    } else throw new Error('Usage: manifest.mjs create|verify DIRECTORY [TAG COMMIT]');
+    } else throw new Error('Usage: manifest.mjs inspect APK | create|verify DIRECTORY [TAG COMMIT]');
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
