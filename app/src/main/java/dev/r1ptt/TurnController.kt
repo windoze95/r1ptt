@@ -108,6 +108,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     private var interrupted = false
     private var noteJob: Job? = null
     private var pressGeneration = 0L
+    private var updateBlockedPress = false
 
     private class Turn(val id: Long, val conversation: String) {
         var job: Job? = null
@@ -123,6 +124,8 @@ class TurnController(private val app: App) : Gestures.Listener {
     // ---- gestures (main thread) ----
 
     override fun onPress(atMs: Long) {
+        updateBlockedPress = !app.updates.allowVoice()
+        if (updateBlockedPress) return
         pressGeneration++
         app.store.loadError?.let {
             live.reset()
@@ -171,6 +174,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     override fun onHoldStart() {
+        if (updateBlockedPress || app.updates.installing) return
         app.store.loadError?.let { fail(it); settle(); return }
         val cfg = app.store.value
         val micMissing = when {
@@ -195,6 +199,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     override fun onHoldEnd() {
+        if (updateBlockedPress || app.updates.installing) return
         if (app.store.loadError != null) return settle()
         if (liveTurn) {
             live.holdEnd()
@@ -228,6 +233,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     override fun onShortRelease() {
+        if (updateBlockedPress || app.updates.installing) return
         if (liveTurn) live.shortRelease(stoppedReply = interrupted)
         stream?.cancel()
         stream = null
@@ -237,6 +243,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     override fun onTap() {
+        if (updateBlockedPress || app.updates.installing) return
         val t = target
         when {
             interrupted -> interrupted = false // that press already stopped the reply
@@ -247,6 +254,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     override fun onDoubleTap() {
+        if (updateBlockedPress || app.updates.installing) return
         pressGeneration++
         interrupted = false
         live.reset()
@@ -257,6 +265,7 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     /** Screen on: with the keyboard closed, the next thing is probably a voice turn. */
     fun screenOn() {
+        if (app.updates.installing) return
         if (target?.isActive() != true) live.warm()
     }
 
@@ -273,6 +282,7 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     /** A message typed into the launcher's text field: chat model + text-to-speech. */
     fun sendText(text: String) {
+        if (!app.updates.allowVoice()) return
         app.store.loadError?.let { fail(it); settle(); return }
         pressGeneration++
         live.reset() // the next voice turn starts a fresh session that knows about this exchange
@@ -283,6 +293,13 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     // ---- the turn ----
+
+    /** Only the explicit installer uses this; an active exchange is never interrupted for an update. */
+    fun prepareForUpdate(): Boolean {
+        if (busy || current != null) return false
+        live.reset() // close an idle warm socket before handing control to Android's installer
+        return true
+    }
 
     private fun launch(id: Long = TurnMetrics.next(), emitStart: Boolean = true, block: suspend (Turn) -> Unit) {
         val turn = Turn(id, app.history.convId)

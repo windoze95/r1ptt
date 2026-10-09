@@ -3,6 +3,23 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Tagged distributions must opt in to a stable, explicitly supplied signing identity.
+// Ordinary local builds retain their existing version and local debug signing behavior.
+val releaseTag = providers.gradleProperty("releaseTag").orNull
+val releaseSigning = providers.gradleProperty("releaseSigning").orNull == "true"
+val releaseCode = releaseTag?.let { tag ->
+    val parts = Regex("v(0|[1-9][0-9]{0,3})\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})").matchEntire(tag)
+        ?: error("releaseTag must be vMAJOR.MINOR.PATCH")
+    val (major, minor, patch) = parts.destructured
+    require(major.toInt() <= 2099) { "Release major version is out of range" }
+    (major.toInt() * 1_000_000 + minor.toInt() * 1_000 + patch.toInt()).also {
+        require(it in 2..2_099_999_999) { "Release version code is out of range" }
+    }
+}
+require((releaseTag != null) == releaseSigning) { "Tagged builds require releaseSigning=true; release signing requires a tag" }
+fun signingEnv(name: String) = providers.environmentVariable(name).orNull?.takeIf { it.isNotBlank() }
+    ?: error("Missing release signing input: $name")
+
 android {
     namespace = "dev.r1ptt"
     compileSdk = 35
@@ -12,16 +29,23 @@ android {
         // The R1 runs Android 13 (stock) or 14 (LineageOS 21 GSI).
         minSdk = 33
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = releaseCode ?: 1
+        versionName = releaseTag?.drop(1) ?: "0.1.0"
+    }
+
+    if (releaseSigning) signingConfigs.create("distribution") {
+        storeFile = file(signingEnv("ROBOTOS_KEYSTORE_PATH"))
+        storePassword = signingEnv("ROBOTOS_STORE_PASSWORD")
+        keyAlias = signingEnv("ROBOTOS_KEY_ALIAS")
+        keyPassword = signingEnv("ROBOTOS_KEY_PASSWORD")
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // A personal device build: sign with the local debug key so `adb install -r` just works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Tagged distributions use the approved stable key; local builds keep their existing identity.
+            signingConfig = signingConfigs.getByName(if (releaseSigning) "distribution" else "debug")
         }
     }
 

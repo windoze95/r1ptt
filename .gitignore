@@ -14,3 +14,9 @@ firmware/
 *.img
 *.img.gz
 *.img.xz
+
+# Signing identities stay outside the repository; only public release certificates are published.
+*.jks
+*.keystore
+*.p12
+*.pfx
