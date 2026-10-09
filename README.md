@@ -98,6 +98,12 @@ Build: `tools/build.sh` (JDK 17+ and the Android SDK; writes `out/r1ptt.apk` and
 `out/r1ptt-system.zip`).
 Tests: `./gradlew :app:testDebugUnitTest`.
 
+App updates: **Settings → App updates** checks for signed APK releases when requested. The
+release workflow is disabled until signing continuity and owner-controlled bootstrap are set up.
+See [docs/UPDATES.md](docs/UPDATES.md) for release tags, secure signing setup, the first device
+installation, Android confirmation and recovery. It updates the app only; hardware acceptance
+of the updater remains pending.
+
 ## License
 
 MIT; see [LICENSE](LICENSE). Parts are adapted from ClawPTT (also MIT); [NOTICE](NOTICE) has the

@@ -201,6 +201,7 @@ class HomeActivity : Activity(), DictationTarget {
     }
 
     override fun sendTyped(): Boolean {
+        if (app.updates.installing) return false // retain unsent text during the installer handoff
         if (app.store.loadError != null) { render(app.turns.state.value); return false }
         val text = input.text.toString().trim()
         if (text.isEmpty()) return false

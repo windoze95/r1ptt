@@ -6,6 +6,7 @@ import dev.r1ptt.data.ConfigStore
 import dev.r1ptt.data.History
 import dev.r1ptt.power.RadioPolicy
 import dev.r1ptt.power.ScreenPolicy
+import dev.r1ptt.update.UpdateManager
 
 /**
  * Process-wide singletons. Everything runs in one process: the launcher, the settings screen and
@@ -24,6 +25,8 @@ class App : Application() {
         private set
     lateinit var turns: TurnController
         private set
+    lateinit var updates: UpdateManager
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -33,5 +36,7 @@ class App : Application() {
         screen = ScreenPolicy(this)
         battery = BatteryLog(filesDir)
         turns = TurnController(this)
+        updates = UpdateManager(this)
+        updates.recover()
     }
 }

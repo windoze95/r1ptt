@@ -19,6 +19,7 @@ import android.widget.Toast
 import dev.r1ptt.data.Config
 import dev.r1ptt.data.ConfigPersistenceException
 import dev.r1ptt.power.DeviceSettings
+import dev.r1ptt.update.UpdateActivity
 import org.json.JSONObject
 
 /**
@@ -134,6 +135,8 @@ class SettingsActivity : Activity() {
             button("Reboot") { confirm("Reboot now?") { DeviceSettings.reboot() } },
             button("Power off") { confirm("Power off now?") { DeviceSettings.powerOff() } },
         )
+        header("robotOS")
+        root.addView(button("App updates") { startActivity(Intent(this, UpdateActivity::class.java)) })
     }
 
     private fun loadProvider() {
