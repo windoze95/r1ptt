@@ -107,8 +107,9 @@ class TurnController(private val app: App) : Gestures.Listener {
     private var streamTurn = false
     private var interrupted = false
     private var noteJob: Job? = null
+    private var pressGeneration = 0L
 
-    private class Turn {
+    private class Turn(val id: Long, val conversation: String) {
         var job: Job? = null
         var speaker: Speaker? = null
         val reply = StringBuffer()
@@ -122,6 +123,14 @@ class TurnController(private val app: App) : Gestures.Listener {
     // ---- gestures (main thread) ----
 
     override fun onPress(atMs: Long) {
+        pressGeneration++
+        app.store.loadError?.let {
+            live.reset()
+            stopActive()
+            fail(it)
+            settle()
+            return
+        }
         app.screen.notePress()
         val stoppedLive = live.interrupt()
         interrupted = stopActive() || stoppedLive
@@ -139,8 +148,18 @@ class TurnController(private val app: App) : Gestures.Listener {
             return
         }
         if (streamTurn) {
-            val s = SttStream(app, onPartial = ::partial) { level ->
-                _state.update { if (it.phase == Phase.LISTENING || it.phase == Phase.DICTATING) it.copy(level = level) else it }
+            val generation = pressGeneration
+            lateinit var s: SttStream
+            s = SttStream(app, onPartial = { if (generation == pressGeneration) partial(it) }, onFailure = { message ->
+                if (stream === s) {
+                    stream = null
+                    s.cancel()
+                    target?.keepPartial()
+                    fail(message)
+                    settle()
+                }
+            }) { level ->
+                if (generation == pressGeneration) _state.update { if (it.phase == Phase.LISTENING || it.phase == Phase.DICTATING) it.copy(level = level) else it }
             }
             stream = if (s.start()) s else null // connects now; nothing is sent unless it becomes a hold
             return
@@ -152,6 +171,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     override fun onHoldStart() {
+        app.store.loadError?.let { fail(it); settle(); return }
         val cfg = app.store.value
         val micMissing = when {
             liveTurn -> !live.capturing
@@ -160,6 +180,7 @@ class TurnController(private val app: App) : Gestures.Listener {
         }
         if (micMissing) {
             fail("Microphone unavailable")
+            settle()
             return
         }
         noteJob?.cancel()
@@ -174,6 +195,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     override fun onHoldEnd() {
+        if (app.store.loadError != null) return settle()
         if (liveTurn) {
             live.holdEnd()
             return
@@ -186,7 +208,7 @@ class TurnController(private val app: App) : Gestures.Listener {
                 target?.clearPartial()
                 note("Didn't hear anything")
             } else {
-                launch { turn -> transcribeStream(turn, s) }
+                launch(id = s.turnId, emitStart = false) { turn -> transcribeStream(turn, s) }
             }
             settle()
             return
@@ -225,6 +247,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     override fun onDoubleTap() {
+        pressGeneration++
         interrupted = false
         live.reset()
         stopActive()
@@ -239,8 +262,19 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     fun screenOff() = live.screenOff()
 
+    /** Service termination is terminal for microphone, sockets, playback and the wake lock. */
+    fun shutdown() {
+        pressGeneration++
+        live.reset()
+        stopActive()
+        noteJob?.cancel()
+        settle()
+    }
+
     /** A message typed into the launcher's text field: chat model + text-to-speech. */
     fun sendText(text: String) {
+        app.store.loadError?.let { fail(it); settle(); return }
+        pressGeneration++
         live.reset() // the next voice turn starts a fresh session that knows about this exchange
         stopActive()
         app.radio.onActivity()
@@ -250,8 +284,9 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     // ---- the turn ----
 
-    private fun launch(block: suspend (Turn) -> Unit) {
-        val turn = Turn()
+    private fun launch(id: Long = TurnMetrics.next(), emitStart: Boolean = true, block: suspend (Turn) -> Unit) {
+        val turn = Turn(id, app.history.convId)
+        if (emitStart) TurnMetrics.event("turn_start", id, "mode" to 2L, "warm" to 0L, "ready" to 0L, "connection" to 0L)
         current = turn
         turn.job = scope.launch {
             try {
@@ -260,13 +295,15 @@ class TurnController(private val app: App) : Gestures.Listener {
                 throw e
             } catch (e: Throwable) {
                 Log.w(TAG, "turn failed", e)
+                TurnMetrics.event("session_failed", turn.id)
                 if (current === turn) fail(friendly(e))
             } finally {
                 turn.speaker?.stop()
                 // Interrupted mid-reply: keep what arrived so the screen and the context match.
-                if (!turn.replySaved && turn.reply.isNotBlank()) app.history.add(Msg.ASSISTANT, turn.reply.toString().trim() + " …")
+                if (!turn.replySaved && turn.reply.isNotBlank() && app.history.convId == turn.conversation) app.history.add(Msg.ASSISTANT, turn.reply.toString().trim() + " …")
                 if (current === turn) {
                     current = null
+                    TurnMetrics.event("exchange_complete", turn.id)
                     settle()
                 }
             }
@@ -291,6 +328,7 @@ class TurnController(private val app: App) : Gestures.Listener {
         _state.update { it.copy(phase = Phase.TRANSCRIBING, level = 0f) }
         try {
             val text = s.finish() ?: run {
+                check(s.usableRecording) { "Input may be partial; please try again" }
                 // The live session failed (network, server): transcribe the recording instead.
                 Log.w(TAG, "live transcription unavailable; transcribing the recording")
                 val clip = s.recording(clipDir())
@@ -352,6 +390,7 @@ class TurnController(private val app: App) : Gestures.Listener {
                 req, calls,
                 onDelta = { d ->
                     if (current === turn) {
+                        if (turn.reply.isEmpty()) TurnMetrics.event("first_reply", turn.id)
                         turn.reply.append(d)
                         _state.update { it.copy(phase = Phase.ANSWERING, reply = it.reply + d, note = "") }
                         speaker?.let { s -> splitter.feed(d).forEach { s.say(SpeechText.clean(it)) } }
@@ -405,7 +444,9 @@ class TurnController(private val app: App) : Gestures.Listener {
         val t = current
         current = null
         val wasActive = t != null || _state.value.phase.active
+        if (t != null) TurnMetrics.event("interrupt_start", t.id)
         t?.speaker?.stop()
+        if (t != null) TurnMetrics.event("playback_flushed", t.id)
         t?.job?.cancel()
         recorder?.cancel()
         recorder = null

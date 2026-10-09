@@ -15,7 +15,7 @@ So the work goes into making idle as close to "everything off" as possible.
 | Drain | Approach |
 |---|---|
 | Cellular modem | Kept off permanently (airplane mode set up to leave Wi-Fi alone). `power.cellular: true` turns it back on if a SIM is in. |
-| Wi-Fi | Off after `power.wifiIdleMinutes` (default 3) with the screen dark; on again at the next press or screen-on. Reconnecting takes about 1.2 s on the R1 (`tools/wifi-wake-test.sh`), overlapping your speaking; if it ever takes longer, the screen shows "Connecting to Wi-Fi…" and your words are buffered, not lost. |
+| Wi-Fi | Off after `power.wifiIdleMinutes` (default 3) with the screen dark; on again at the next press or screen-on. Reconnection overlaps speaking; its latency on the current build still needs the read-only acceptance workflow in [ACCEPTANCE.md](ACCEPTANCE.md). While connecting, words are buffered within a bounded queue and failures are surfaced. |
 | Bluetooth, location, scanning | Off: no Wi-Fi or BLE "always scanning", no Wi-Fi auto-wakeup, no network recommendations. |
 | Background apps | Rabbit's product partition is removed and LineageOS extras are disabled (`tools/debloat.txt`). The app itself has no timers, polling or open connections while idle. |
 | Doze | Enters light idle immediately and deep idle about 30 s after screen-off (module `service.sh`). |
@@ -25,6 +25,11 @@ So the work goes into making idle as close to "everything off" as possible.
 | CPU per turn | No on-device speech models; the cloud (or your server) does the heavy work. |
 
 ## Measuring
+
+For repeatable current-build acceptance, use the explicit-device, read-only collector and the
+overnight matched-configuration procedure in [ACCEPTANCE.md](ACCEPTANCE.md). Hardware results
+remain pending. The legacy report below uses an implicit ADB target and includes diagnostic
+output; it was not run for the reliability acceptance work.
 
 The app logs battery level at every screen on/off. Those logs bracket the idle periods without
 waking the device to take samples.

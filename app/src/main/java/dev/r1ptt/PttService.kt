@@ -69,7 +69,7 @@ class PttService : Service() {
             listener = app.turns,
         )
         button = SideButton(deviceName = { app.store.value.buttonDevice }) { down ->
-            if (down) gestures.down() else gestures.up()
+            if (instance === this) { if (down) gestures.down() else gestures.up() }
         }
         button.start()
         registerReceiver(
@@ -84,6 +84,7 @@ class PttService : Service() {
         app.radio.applyBaseline()
         DeviceSettings.apply(app.store.value)
         app.battery.record(this, "service_start")
+        TurnMetrics.event("service_started")
     }
 
     /** Button edges from the launcher's own key handling; used only while the root reader is down. */
@@ -103,9 +104,15 @@ class PttService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        if (instance === this) instance = null
+        main.removeCallbacksAndMessages(null)
+        val owned = instance === this
+        if (owned) instance = null
         if (::button.isInitialized) button.stop()
         if (receiverRegistered) unregisterReceiver(screenEvents)
+        if (owned) {
+            (application as App).turns.shutdown()
+            TurnMetrics.event("service_stopped")
+        }
         super.onDestroy()
     }
 

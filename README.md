@@ -18,6 +18,10 @@ other OpenAI-compatible server.
 > speech-to-speech voice turns and live dictation are verified on the device (final text ~0.4 s after
 > release). Typed replies are built but not yet tried on it, and standby battery drain hasn't been
 > measured ([docs/BATTERY.md](docs/BATTERY.md)).
+>
+> The reliability branch adds offline-tested transport/capture limits, interruption isolation and
+> encrypted-save recovery. Its current-build hardware acceptance is pending; the observations above
+> describe the earlier device-tested implementation. See [docs/RELIABILITY.md](docs/RELIABILITY.md).
 
 ## What "firmware" means here
 
@@ -57,6 +61,9 @@ Idle time is where a 1000 mAh battery goes.
   live session closes 20 s after a reply.
 
 [docs/BATTERY.md](docs/BATTERY.md) covers the design and how to measure the idle drain.
+[docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) defines current-build latency, interruption, reconnect,
+service-restart and overnight standby checks. Hardware and acoustic acceptance remain pending;
+the read-only capture and offline analyzer include synthetic fixtures, not hardware results.
 
 ## Getting started
 

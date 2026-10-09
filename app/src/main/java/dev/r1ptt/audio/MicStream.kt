@@ -14,10 +14,12 @@ import kotlin.math.max
 class MicStream(
     private val rate: Int,
     private val onChunk: (ByteArray) -> Unit,
+    private val onFailure: () -> Unit = {},
     private val onLevel: (Float) -> Unit,
 ) {
     @Volatile private var running = false
     private var thread: Thread? = null
+    @Volatile private var record: AudioRecord? = null
 
     @SuppressLint("MissingPermission") // granted at setup; failure is handled like a busy mic
     fun start(): Boolean {
@@ -43,14 +45,16 @@ class MicStream(
             return false
         }
         running = true
+        record = rec
         thread = Thread({ capture(rec) }, "mic-stream").apply { priority = Thread.MAX_PRIORITY; start() }
         return true
     }
 
-    /** Stops after the chunk in progress; when this returns, no more [onChunk] calls happen. */
+    /** Unblocks the read. Callers close their admission gate before stopping capture. */
     fun stop() {
         running = false
-        thread?.join(1000)
+        runCatching { record?.stop() }
+        if (thread !== Thread.currentThread()) thread?.join(1000)
         thread = null
     }
 
@@ -59,12 +63,17 @@ class MicStream(
         try {
             while (running) {
                 val n = rec.read(buf, 0, buf.size)
-                if (n < 0) break
+                if (!running) break
+                if (n < 0) { onFailure(); break }
                 if (n == 0) continue
                 onChunk(buf.copyOf(n - n % 2))
                 onLevel(Recorder.rms(buf, n))
             }
+        } catch (_: Exception) {
+            if (running) onFailure()
         } finally {
+            running = false
+            record = null
             runCatching { rec.stop() }
             rec.release()
         }

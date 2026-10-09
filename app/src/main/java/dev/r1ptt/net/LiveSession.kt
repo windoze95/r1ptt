@@ -1,98 +1,39 @@
 package dev.r1ptt.net
 
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
-import java.util.concurrent.TimeUnit
+import android.os.SystemClock
 
-/**
- * One GPT-Live session over a WebSocket. Messages sent before the server confirms the session are
- * queued and flushed in order once it does. Callbacks arrive on OkHttp's reader thread.
- */
-class LiveSession(private val listener: Listener) {
+/** Bounded, acknowledged GPT-Live transport. No automatic retry/replay of an utterance. */
+class LiveSession(private val listener: Listener, clock: () -> Long = SystemClock::elapsedRealtime) {
     interface Listener {
         fun onEvent(event: LiveProtocol.Event)
-        /** The connection failed or dropped; [message] is short and speakable. */
         fun onFailure(message: String)
         fun onGone()
+        fun onMetric(name: String, stats: SocketPump.Stats) {}
     }
 
-    private val lock = Any()
-    private val pending = ArrayList<String>()
-    private var ws: WebSocket? = null
-    @Volatile var started = false
-        private set
-    @Volatile var gone = false
-        private set
-    @Volatile private var closing = false
+    private val socket = SessionSocket(
+        clock, ::receive, listener::onFailure, listener::onGone, listener::onMetric,
+    )
+    val id get() = socket.id
+    val started get() = socket.ready
+    val gone get() = socket.terminal
 
-    fun connect(url: String, key: String, startMessage: String) {
-        val req = Request.Builder().url(url).header("Authorization", "Bearer $key").build()
-        ws = client.newWebSocket(req, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                webSocket.send(startMessage)
-            }
+    fun connect(url: String, key: String, startMessage: String) = socket.connect(url, key, startMessage)
 
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                val event = LiveProtocol.parse(text)
-                if (event == LiveProtocol.Event.Started) synchronized(lock) {
-                    started = true
-                    pending.forEach(webSocket::send)
-                    pending.clear()
-                }
-                listener.onEvent(event)
-            }
+    fun send(message: String): Boolean = socket.send(
+        message, control = message == LiveProtocol.MUTE || message == LiveProtocol.UNMUTE,
+        marker = if (message == LiveProtocol.MUTE) "input_end_sent" else "",
+    )
 
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                webSocket.close(1000, null)
-            }
+    fun close() = socket.close(if (started) LiveProtocol.CLOSE else null)
+    fun reject(message: String) = socket.reject(message)
 
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = finish()
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                val message = when {
-                    response != null && !response.isSuccessful ->
-                        friendly(ApiError(response.code, errorMessage(response.body?.string().orEmpty())))
-                    else -> friendly(t)
-                }
-                // Hanging up after our own close request isn't a failure.
-                if (!gone && !closing) listener.onFailure(message)
-                finish()
-            }
-        })
-    }
-
-    /** Sends now if the session is up, otherwise queues until it is. Thread-safe. */
-    fun send(message: String) {
-        synchronized(lock) {
-            if (gone) return
-            if (started) ws?.send(message) else pending += message
+    private fun receive(text: String) {
+        when (val e = LiveProtocol.parse(text)) {
+            LiveProtocol.Event.Started -> if (socket.acknowledge()) listener.onEvent(e)
+            is LiveProtocol.Event.Failed -> socket.reject("Voice session failed; input may be partial")
+            is LiveProtocol.Event.Closed -> socket.reject("Voice session closed; input may be partial")
+            else -> if (started) listener.onEvent(e)
         }
-    }
-
-    /** Asks the server to end the session (it answers session.closed, then hangs up). */
-    fun close() {
-        if (gone) return
-        closing = true
-        if (started) send(LiveProtocol.CLOSE) else ws?.cancel()
-        // Don't wait forever for a polite goodbye.
-        ws?.let { w -> Thread { Thread.sleep(3000); w.cancel() }.start() }
-    }
-
-    private fun finish() {
-        if (gone) return
-        gone = true
-        synchronized(lock) { pending.clear() }
-        listener.onGone()
-    }
-
-    private companion object {
-        /** No read timeout (the line is quiet between turns); pings keep NAT mappings alive. */
-        val client: OkHttpClient = Http.client.newBuilder()
-            .readTimeout(0, TimeUnit.SECONDS)
-            .pingInterval(15, TimeUnit.SECONDS)
-            .build()
     }
 }

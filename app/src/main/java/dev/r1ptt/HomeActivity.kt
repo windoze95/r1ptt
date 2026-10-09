@@ -201,6 +201,7 @@ class HomeActivity : Activity(), DictationTarget {
     }
 
     override fun sendTyped(): Boolean {
+        if (app.store.loadError != null) { render(app.turns.state.value); return false }
         val text = input.text.toString().trim()
         if (text.isEmpty()) return false
         input.text.clear()
@@ -258,6 +259,7 @@ class HomeActivity : Activity(), DictationTarget {
     }
 
     private fun idleHint(): String {
+        app.store.loadError?.let { return it }
         val cfg = app.store.value
         return when {
             cfg.provider.apiKey.isBlank() && cfg.provider.id == "openai" -> getString(R.string.need_key)

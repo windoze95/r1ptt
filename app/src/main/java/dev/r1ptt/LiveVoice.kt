@@ -3,7 +3,6 @@ package dev.r1ptt
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.util.Log
 import dev.r1ptt.audio.MicStream
 import dev.r1ptt.audio.PcmPlayer
 import dev.r1ptt.audio.Recorder
@@ -11,21 +10,9 @@ import dev.r1ptt.data.Config
 import dev.r1ptt.data.Msg
 import dev.r1ptt.net.LiveProtocol
 import dev.r1ptt.net.LiveSession
+import dev.r1ptt.net.SocketPump
 
-/**
- * Voice turns with the keyboard closed, as speech-to-speech through gpt-live-1, which hands real
- * thinking to the configured backend model (gpt-6.1-sol). Typed and dictated turns don't come here.
- *
- * Push-to-talk on a full-duplex model:
- * - the microphone streams only while the button is held (input is muted otherwise);
- * - reply audio plays only after release; audio arriving during a hold is held back, keeping just
- *   the last moment in case the answer began as the user finished speaking;
- * - a press stops a reply that is playing (barge-in);
- * - the session stays open [Config.live] idleCloseSec after an exchange for quick follow-ups, then
- *   closes, since it is billed per second while open.
- *
- * Confined to the main thread; network and audio callbacks are posted to it.
- */
+/** App-owned voice exchanges. Interrupted/failed sockets are discarded; completed ones stay warm. */
 class LiveVoice(
     private val app: App,
     private val publish: (TurnState) -> Unit,
@@ -34,203 +21,192 @@ class LiveVoice(
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val tracker = LiveTracker(SystemClock::elapsedRealtime)
-    private val player = PcmPlayer(LiveProtocol.SAMPLE_RATE)
-
+    private val scope = ExchangeScope()
+    private val player = PcmPlayer(LiveProtocol.SAMPLE_RATE,
+        onStarted = { id -> main.post { if (active && turnId == id) TurnMetrics.event("playback_started", id) } },
+        onFailure = { id -> main.post { if (active && turnId == id) failExchange("Audio output unavailable") } },
+    )
     @Volatile private var session: LiveSession? = null
     private var mic: MicStream? = null
     private val micLock = Any()
-    private var streaming = false // mic chunks go straight to the session (guarded by micLock)
-    private val preRoll = ArrayList<ByteArray>() // captured before the hold was confirmed (micLock)
-    private val held = ArrayDeque<Pair<Long, ByteArray>>() // reply audio that arrived during a hold
+    private var captureGeneration = 0L
+    private var captureOpen = false
+    private var streaming = false
+    private val preRoll = ArrayList<ByteArray>()
+    private val held = ArrayDeque<Pair<Long, ByteArray>>()
+    private var heldBytes = 0
     private val heard = StringBuilder()
     private val said = StringBuilder()
-    private var suppress = false // a press stopped the reply: drop the rest of it until the next turn
-    private var active = false // an exchange is in progress
+    private var active = false
+    @Volatile private var turnId = 0L
     @Volatile private var level = 0f
     private var waitingForNet = false
-    private var firstAudioLogged = false
-
+    private var firstReply = false
     private val ticker = object : Runnable {
-        override fun run() {
-            tick()
-            if (active) main.postDelayed(this, 200)
-        }
+        override fun run() { tick(); if (active) main.postDelayed(this, 200) }
     }
-    /** Ends an idle session; never one mid-exchange (then it checks again later). */
     private val closer = Runnable { if (busy) scheduleClose() else closeSession() }
+    val busy get() = active || mic != null
+    val capturing get() = mic != null
 
-    val busy: Boolean get() = active || mic != null
-
-    val capturing: Boolean get() = mic != null
-
-    /** Stops a reply that is playing or being worked on. True if there was one. */
+    /** GPT-Live supplies no exchange cancellation/ID here; replace the socket on barge-in. */
     fun interrupt(): Boolean {
-        val audible = active && !tracker.holding
-        if (audible) {
-            player.flush()
-            suppress = true
-        }
-        return audible
+        if (!active || tracker.holding) return false
+        TurnMetrics.event("interrupt_start", turnId)
+        stopExchange(save = true, close = true)
+        publish(TurnState())
+        settled()
+        return true
     }
 
-    /** Starts capturing at the press, before we know it's a hold, so no word is lost. */
     fun startCapture(): Boolean {
         main.removeCallbacks(closer)
-        synchronized(micLock) {
-            preRoll.clear()
-            streaming = false
-        }
-        val m = MicStream(LiveProtocol.SAMPLE_RATE, ::onMicChunk) { level = it }
+        stopCapture()
+        turnId = TurnMetrics.next()
+        val warm = session?.takeIf { !it.gone }
+        TurnMetrics.event("turn_start", turnId, "mode" to 0L, "warm" to if (warm != null) 1L else 0L,
+            "ready" to if (warm?.started == true) 1L else 0L, "connection" to (warm?.id ?: 0L))
+        val generation = synchronized(micLock) { captureOpen = true; captureGeneration }
+        val m = MicStream(LiveProtocol.SAMPLE_RATE,
+            { pcm -> onMicChunk(generation, pcm) },
+            { main.post { if (synchronized(micLock) { captureOpen && generation == captureGeneration }) failExchange("Microphone unavailable") } },
+        ) { if (synchronized(micLock) { captureOpen && generation == captureGeneration }) level = it }
         mic = if (m.start()) m else null
+        if (mic == null) { stopCapture(); TurnMetrics.event("session_failed", turnId); settled() }
         return mic != null
     }
 
-    /** The press is a hold: open (or reuse) the session, unmute, send what was captured so far. */
     fun holdStart() {
-        Log.i(TAG, "live: hold, session ${if (session?.takeIf { !it.gone } != null) "reused" else "new"}, ${preRoll.size} chunks pre-rolled")
+        if (mic == null) return
         flushExchange()
+        tracker.reset()
         tracker.hold()
-        held.clear()
+        clearHeld()
+        firstReply = false
         active = true
-        startTicker()
         val s = session?.takeIf { !it.gone } ?: openSession()
-        s.send(LiveProtocol.UNMUTE)
+        scope.begin(s.id)
+        TurnMetrics.event("hold_start", turnId, "connection" to s.id)
+        startTicker()
+        if (!s.send(LiveProtocol.UNMUTE)) return
         synchronized(micLock) {
-            preRoll.forEach { s.send(LiveProtocol.append(it)) }
+            for (pcm in preRoll) if (!s.send(LiveProtocol.append(pcm))) break
             preRoll.clear()
-            streaming = true
+            streaming = !s.gone
         }
         publishState(LiveTracker.Phase.LISTENING)
     }
 
-    /** Released after a hold: mute, and play any answer that began as the user finished. */
     fun holdEnd() {
-        Log.i(TAG, "live: release")
-        mic?.stop()
-        mic = null
-        synchronized(micLock) {
-            streaming = false
-            preRoll.clear()
-        }
-        session?.send(LiveProtocol.MUTE)
+        if (!active) { stopCapture(); return }
+        TurnMetrics.event("release", turnId)
+        // Close admission before stopping AudioRecord, then append MUTE behind accepted PCM.
+        stopCapture(release = true)
+        val s = session ?: return failExchange("Voice connection closed; input may be partial")
+        if (!s.send(LiveProtocol.MUTE)) return
         tracker.release()
-        suppress = false
-        firstAudioLogged = false
         val cutoff = SystemClock.elapsedRealtime() - KEEP_TAIL_MS
         val tail = held.filter { it.first >= cutoff }.map { it.second }.dropWhile { !isSpeech(it) }
-        held.clear()
-        tail.forEach {
-            player.play(it)
-            tracker.audio(isSpeech(it))
-        }
+        clearHeld()
+        for (pcm in tail) if (!play(pcm)) return
     }
 
-    /** It was a tap: nothing was sent. If the press stopped a reply, that exchange is over. */
     fun shortRelease(stoppedReply: Boolean) {
-        mic?.stop()
-        mic = null
+        stopCapture()
+        if (!active) scheduleClose()
+        settled()
+    }
+
+    fun warm() {
+        val cfg = app.store.value
+        if (app.store.loadError != null || !cfg.liveVoice || !cfg.live.warm) return
+        if (session?.takeIf { !it.gone } == null) openSession()
+        if (!busy) scheduleClose()
+    }
+    fun screenOff() { if (!busy) closeSession() }
+    fun reset() { stopExchange(save = true, close = true); settled() }
+
+    private fun stopCapture(release: Boolean = false) {
+        val m = mic
         synchronized(micLock) {
+            captureOpen = false
+            captureGeneration++
             streaming = false
             preRoll.clear()
         }
-        if (stoppedReply) finishExchange()
-        else if (!active) scheduleClose() // a warm session opened at the press shouldn't linger
+        if (release) TurnMetrics.event("release_gate_closed", turnId)
+        mic = null
+        m?.stop()
     }
 
-    /**
-     * Opens a session ahead of time (screen on, or the moment of a press) so a hold doesn't wait for
-     * the TLS and session handshake, which took 3.5 s on a cold start. It's billed per second while
-     * open, so an idle warm session closes at screen-off or after idleCloseSec.
-     */
-    fun warm() {
-        val cfg = app.store.value
-        if (!cfg.liveVoice || !cfg.live.warm) return
-        if (session?.takeIf { !it.gone } == null) {
-            Log.i(TAG, "live: warming a session")
-            openSession()
-        }
-        if (!busy) scheduleClose()
-    }
-
-    /** Screen off: nobody is about to talk, so don't pay for an idle session. */
-    fun screenOff() {
-        if (!busy) closeSession()
-    }
-
-    /** New conversation, or a typed turn: end the session so the next one starts from the history. */
-    fun reset() {
-        flushExchange()
-        closeSession()
-        player.flush()
-        tracker.reset()
-        held.clear()
-        active = false
-        suppress = false
-    }
-
-    // ---- internals ----
-
-    private fun onMicChunk(pcm: ByteArray) {
-        synchronized(micLock) {
-            if (streaming) session?.send(LiveProtocol.append(pcm))
-            else if (preRoll.size < MAX_PREROLL_CHUNKS) preRoll += pcm
+    private fun onMicChunk(generation: Long, pcm: ByteArray) = synchronized(micLock) {
+        if (!captureOpen || generation != captureGeneration) return@synchronized
+        if (streaming) session?.send(LiveProtocol.append(pcm))
+        else if (preRoll.size < MAX_PREROLL_CHUNKS) preRoll += pcm
+        else {
+            captureOpen = false
+            main.post { if (generation == captureGeneration) failExchange("Audio pre-roll full; input may be partial") }
         }
     }
 
     private fun openSession(): LiveSession {
         val cfg = app.store.value
+        val callbacks = CallbackBudget(LiveProtocol.SAMPLE_RATE * 2 * 8, 256)
         lateinit var s: LiveSession
         s = LiveSession(object : LiveSession.Listener {
             override fun onEvent(event: LiveProtocol.Event) {
-                main.post { if (session === s) handle(event) }
+                if (session !== s) return
+                val size = when (event) {
+                    is LiveProtocol.Event.Audio -> event.pcm.size
+                    is LiveProtocol.Event.Heard -> event.delta.length * 2
+                    is LiveProtocol.Event.Said -> event.delta.length * 2
+                    else -> 0
+                }
+                if (!callbacks.reserve(size)) { s.reject("Voice callback queue full"); return }
+                val token = scope.snapshot(s.id) // capture identity before posting to main
+                main.postAtTime({
+                    try {
+                        if (session === s && !s.gone) {
+                            if (event == LiveProtocol.Event.Started) tracker.restartWait()
+                            else if (scope.accepts(token)) handle(event)
+                        }
+                    } finally { callbacks.release(size) }
+                }, s, SystemClock.uptimeMillis())
             }
-
             override fun onFailure(message: String) {
-                Log.w(TAG, "live: connection failed: $message")
-                main.post {
-                    if (session !== s) return@post
-                    session = null
-                    if (active) {
-                        resetExchange()
-                        fail(message)
-                    }
+                main.postAtFrontOfQueue {
+                    if (session !== s) return@postAtFrontOfQueue
+                    if (busy) failExchange(message) else closeSession()
                 }
             }
-
-            override fun onGone() {
-                main.post { if (session === s) session = null }
+            override fun onGone() { main.post { if (session === s && !busy) session = null } }
+            override fun onMetric(name: String, stats: SocketPump.Stats) {
+                TurnMetrics.event(name, turnId, "connection" to s.id,
+                    "queued_bytes" to stats.queuedBytes, "max_queue_ms" to stats.maxQueueMs)
             }
         })
-        Log.i(TAG, "live: connecting to ${cfg.live.url} (${cfg.live.model} → ${cfg.live.backendModel})")
         session = s
-        val start = LiveProtocol.start(
-            cfg.live.model, instructions(cfg), cfg.live.voice, cfg.live.backendModel,
-            cfg.live.reasoningEffort, cfg.live.webSearch,
-        )
-        val key = cfg.keyFor(cfg.liveEndpoint)
-        connectWhenOnline(s, cfg.live.url, key, start, deadline = SystemClock.elapsedRealtime() + NET_WAIT_MS)
+        TurnMetrics.event("connect_start", turnId, "connection" to s.id)
+        val start = LiveProtocol.start(cfg.live.model, instructions(cfg), cfg.live.voice, cfg.live.backendModel,
+            cfg.live.reasoningEffort, cfg.live.webSearch)
+        connectWhenOnline(s, cfg.live.url, cfg.keyFor(cfg.liveEndpoint), start, SystemClock.elapsedRealtime() + NET_WAIT_MS)
         return s
     }
 
-    /** Wi-Fi may still be reconnecting after an idle cut; audio queues in the session meanwhile. */
     private fun connectWhenOnline(s: LiveSession, url: String, key: String, start: String, deadline: Long) {
-        if (session !== s) return
+        if (session !== s || s.gone) return
         when {
             app.radio.isOnline() -> {
+                if (waitingForNet) TurnMetrics.event("network_available", turnId, "connection" to s.id)
                 waitingForNet = false
                 s.connect(url, key, start)
             }
-            SystemClock.elapsedRealtime() > deadline -> {
-                Log.w(TAG, "live: no network after ${NET_WAIT_MS / 1000} s")
-                waitingForNet = false
-                session = null
-                if (active) {
-                    resetExchange()
-                    fail("No network")
-                }
+            SystemClock.elapsedRealtime() >= deadline -> {
+                if (busy) failExchange("No network; input may be partial") else closeSession()
             }
             else -> {
-                waitingForNet = true // Wi-Fi is coming back from an idle cut; audio queues meanwhile
+                if (!waitingForNet) TurnMetrics.event("network_wait", turnId, "connection" to s.id)
+                waitingForNet = true
                 main.postDelayed({ connectWhenOnline(s, url, key, start, deadline) }, 200)
             }
         }
@@ -239,47 +215,44 @@ class LiveVoice(
     private fun handle(event: LiveProtocol.Event) {
         when (event) {
             is LiveProtocol.Event.Audio -> {
-                if (suppress) return
                 if (tracker.holding) {
+                    if (event.pcm.size > MAX_HELD_BYTES) return failExchange("Reply audio too large")
                     val now = SystemClock.elapsedRealtime()
                     held.addLast(now to event.pcm)
-                    while (held.isNotEmpty() && held.first().first < now - KEEP_TAIL_MS) held.removeFirst()
-                } else {
-                    if (!firstAudioLogged && isSpeech(event.pcm)) { firstAudioLogged = true; Log.i(TAG, "live: first reply speech") }
-                    player.play(event.pcm)
-                    tracker.audio(isSpeech(event.pcm))
-                }
+                    heldBytes += event.pcm.size
+                    while (held.isNotEmpty() && (held.first().first < now - KEEP_TAIL_MS || heldBytes > MAX_HELD_BYTES)) {
+                        heldBytes -= held.removeFirst().second.size
+                    }
+                } else play(event.pcm)
             }
-            is LiveProtocol.Event.Heard -> heard.append(event.delta)
-            is LiveProtocol.Event.Said -> if (!suppress) said.append(event.delta)
+            is LiveProtocol.Event.Heard -> {
+                if (event.delta.length > MAX_TEXT_CHARS - heard.length) return failExchange("Voice transcript too large")
+                heard.append(event.delta)
+            }
+            is LiveProtocol.Event.Said -> {
+                if (event.delta.length > MAX_TEXT_CHARS - said.length) return failExchange("Voice reply too large")
+                said.append(event.delta)
+            }
             LiveProtocol.Event.DelegationStarted -> tracker.delegationStarted()
             is LiveProtocol.Event.Backend -> tracker.backend(event.finished, event.searching)
-            is LiveProtocol.Event.Closed -> session = null
-            is LiveProtocol.Event.Failed -> {
-                Log.w(TAG, "live: server error: ${event.message}")
-                closeSession()
-                if (active) {
-                    resetExchange()
-                    fail(event.message)
-                }
-            }
-            LiveProtocol.Event.Started -> {
-                Log.i(TAG, "live: session started")
-                tracker.restartWait()
-            }
-            LiveProtocol.Event.Other -> {}
+            else -> {} // transport owns Started/Failed/Closed
         }
+    }
+
+    private fun play(pcm: ByteArray): Boolean {
+        val speech = isSpeech(pcm)
+        if (speech && !firstReply) { firstReply = true; TurnMetrics.event("first_reply", turnId) }
+        if (!player.play(pcm, turnId, speech)) { failExchange("Reply audio queue full"); return false }
+        tracker.audio(speech)
+        return true
     }
 
     private fun tick() {
         if (!active) return
         val phase = tracker.phase(player.busy())
         when {
-            !waitingForNet && tracker.noReply() -> {
-                Log.w(TAG, "live: no reply")
-                resetExchange()
-                fail("No reply")
-            }
+            tracker.expired() -> failExchange("Voice turn timed out; input may be partial")
+            !waitingForNet && tracker.noReply() -> failExchange("No reply; please try again")
             phase == LiveTracker.Phase.IDLE -> finishExchange()
             else -> publishState(phase)
         }
@@ -287,73 +260,72 @@ class LiveVoice(
 
     private fun publishState(phase: LiveTracker.Phase) {
         val cfg = app.store.value
-        publish(
-            when (phase) {
-                LiveTracker.Phase.LISTENING -> TurnState(
-                    phase = Phase.LISTENING, level = level, heard = heard.toString().trim(),
-                    note = if (waitingForNet) CONNECTING else "",
-                )
-                LiveTracker.Phase.WAITING -> TurnState(
-                    phase = Phase.THINKING, heard = heard.toString().trim(), reply = said.toString().trim(),
-                    note = if (waitingForNet) CONNECTING else "",
-                )
-                LiveTracker.Phase.LOOKING_UP -> TurnState(
-                    phase = Phase.THINKING, heard = heard.toString().trim(), reply = said.toString().trim(),
-                    note = if (tracker.lookingUpWeb) "Searching the web…" else "Thinking (${cfg.live.backendModel})…",
-                )
-                LiveTracker.Phase.SPEAKING -> TurnState(phase = Phase.SPEAKING, heard = heard.toString().trim(), reply = said.toString().trim())
-                LiveTracker.Phase.IDLE -> TurnState()
-            }
-        )
+        publish(when (phase) {
+            LiveTracker.Phase.LISTENING -> TurnState(Phase.LISTENING, level, heard.toString().trim(), note = if (waitingForNet) CONNECTING else "")
+            LiveTracker.Phase.WAITING -> TurnState(Phase.THINKING, heard = heard.toString().trim(), reply = said.toString().trim(), note = if (waitingForNet) CONNECTING else "")
+            LiveTracker.Phase.LOOKING_UP -> TurnState(Phase.THINKING, heard = heard.toString().trim(), reply = said.toString().trim(), note = if (tracker.lookingUpWeb) "Searching the web…" else "Thinking (${cfg.live.backendModel})…")
+            LiveTracker.Phase.SPEAKING -> TurnState(Phase.SPEAKING, heard = heard.toString().trim(), reply = said.toString().trim())
+            LiveTracker.Phase.IDLE -> TurnState()
+        })
     }
 
-    /** The exchange is over: save it, go idle, close the session after a while. */
     private fun finishExchange() {
-        Log.i(TAG, "live: exchange done — heard ${heard.length} chars, said ${said.length} chars")
+        stopCapture()
+        scope.end()
         flushExchange()
         tracker.reset()
         active = false
+        main.removeCallbacks(ticker)
+        TurnMetrics.event("exchange_complete", turnId)
         publish(TurnState())
         scheduleClose()
         settled()
     }
 
-    /** The exchange failed: drop it (the caller reports the error). */
-    private fun resetExchange() {
-        flushExchange()
-        tracker.reset()
-        player.flush()
-        held.clear()
-        active = false
-        scheduleClose()
+    private fun failExchange(message: String) {
+        TurnMetrics.event("session_failed", turnId)
+        stopExchange(save = false, close = true)
+        fail(message)
         settled()
     }
 
-    private fun flushExchange() {
-        val q = heard.toString().trim()
-        val a = said.toString().trim()
-        if (q.isNotEmpty()) app.history.add(Msg.USER, q)
-        if (a.isNotEmpty()) app.history.add(Msg.ASSISTANT, a)
-        heard.setLength(0)
-        said.setLength(0)
+    private fun stopExchange(save: Boolean, close: Boolean) {
+        scope.end() // invalidate posted transcript/backend callbacks before changing state
+        stopCapture()
+        if (close) closeSession()
+        player.flush()
+        TurnMetrics.event("playback_flushed", turnId)
+        if (save) flushExchange() else { heard.setLength(0); said.setLength(0) }
+        tracker.reset()
+        clearHeld()
+        waitingForNet = false
+        active = false
+        main.removeCallbacks(ticker)
     }
 
+    private fun clearHeld() { held.clear(); heldBytes = 0 }
+    private fun flushExchange() {
+        val q = heard.toString().trim(); val a = said.toString().trim()
+        if (q.isNotEmpty()) app.history.add(Msg.USER, q)
+        if (a.isNotEmpty()) app.history.add(Msg.ASSISTANT, a)
+        heard.setLength(0); said.setLength(0)
+    }
     private fun scheduleClose() {
         main.removeCallbacks(closer)
         main.postDelayed(closer, app.store.value.live.idleCloseSec.coerceIn(5, 600) * 1000L)
     }
-
     private fun closeSession() {
         main.removeCallbacks(closer)
-        session?.close()
-        session = null
+        val s = session
+        session = null // fence callbacks before cancel/close
+        waitingForNet = false
+        if (s != null) {
+            s.close()
+            main.removeCallbacksAndMessages(s) // socket termination fences the reader before removal
+            TurnMetrics.event("session_closed", turnId, "connection" to s.id)
+        }
     }
-
-    private fun startTicker() {
-        main.removeCallbacks(ticker)
-        main.post(ticker)
-    }
-
+    private fun startTicker() { main.removeCallbacks(ticker); main.post(ticker) }
     private fun instructions(cfg: Config): String {
         val recent = app.history.messages.takeLast(8).joinToString("\n") {
             (if (it.role == Msg.USER) "User: " else "You: ") + it.text.take(300)
@@ -364,18 +336,13 @@ class LiveVoice(
             if (recent.isNotBlank()) append("\n\nEarlier in this conversation:\n").append(recent)
         }
     }
-
-    private fun isSpeech(pcm: ByteArray) = Recorder.rms(pcm, pcm.size) > SPEECH_RMS
-
+    private fun isSpeech(pcm: ByteArray) = Recorder.rms(pcm, pcm.size) > 0.004f
     private companion object {
-        /** Reply audio from this last part of a hold is kept: the answer may begin as the user finishes. */
         const val KEEP_TAIL_MS = 1500L
-        const val SPEECH_RMS = 0.004f
-        /** ~10 s of 40 ms chunks while waiting for the network. */
+        const val MAX_HELD_BYTES = LiveProtocol.SAMPLE_RATE * 2 * 3 / 2
         const val MAX_PREROLL_CHUNKS = 250
-        /** Wi-Fi coming back from an idle cut can take a while on the R1. */
+        const val MAX_TEXT_CHARS = 65_536
         const val NET_WAIT_MS = 30_000L
         const val CONNECTING = "Connecting to Wi-Fi…"
-        const val TAG = "r1ptt"
     }
 }

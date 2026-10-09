@@ -20,15 +20,21 @@ class ConfigReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION) return
         val app = context.applicationContext as App
-        resultData = try {
+        val cfg = try {
             val b64 = requireNotNull(intent.getStringExtra("json_b64")) { "missing json_b64 extra" }
-            val cfg = app.store.import(String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8))
+            app.store.import(String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8))
+        } catch (e: ConfigPersistenceException) {
+            resultData = "error: ${e.message}" // fixed recovery guidance, never the crypto cause
+            return
+        } catch (_: Exception) {
+            // JSON/base64 errors can quote input, including a provisioned token.
+            resultData = "error: Invalid settings; nothing was saved"
+            return
+        }
+        resultData = if (runCatching {
             DeviceSettings.apply(cfg)
             app.radio.applyBaseline()
-            "ok"
-        } catch (e: Exception) {
-            "error: ${e.message}"
-        }
+        }.isSuccess) "ok" else "error: Settings saved; power policy could not be applied"
     }
 
     companion object {
