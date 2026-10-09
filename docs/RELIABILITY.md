@@ -1,6 +1,6 @@
 # Voice reliability boundaries
 
-These changes are independent implementation work in r1ptt. They do not import JackRabbit's
+These changes are independent implementation work in robotOS. They do not import JackRabbit's
 PolyForm Noncommercial code or add its Python runtime, flash distribution, camera or tool system.
 The Android/kernel/vendor, button remaps and existing power settings remain the current platform.
 

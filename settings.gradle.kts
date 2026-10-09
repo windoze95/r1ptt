@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "r1ptt"
+rootProject.name = "robotOS"
 include(":app")

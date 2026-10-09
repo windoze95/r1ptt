@@ -1,4 +1,4 @@
-r1ptt builds on work by others.
+robotOS builds on work by others.
 
 - ClawPTT (https://github.com/mthelpme/clawptt) and rabbit-r1-openclaw
   (https://github.com/mthelpme/rabbit-r1-openclaw): the R1 side-button facts (mtk-kpd scancode
