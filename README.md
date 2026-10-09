@@ -19,7 +19,7 @@ other OpenAI-compatible server.
 > release). Typed replies are built but not yet tried on it, and standby battery drain hasn't been
 > measured ([docs/BATTERY.md](docs/BATTERY.md)).
 >
-> The reliability branch adds offline-tested transport/capture limits, interruption isolation and
+> The current reliability changes add offline-tested transport/capture limits, interruption isolation and
 > encrypted-save recovery. Its current-build hardware acceptance is pending; the observations above
 > describe the earlier device-tested implementation. See [docs/RELIABILITY.md](docs/RELIABILITY.md).
 

@@ -37,7 +37,12 @@ class SttStream(
     @Volatile private var peakLevel = 0f
     private var waitingForNet = false
     private val mic = MicStream(TranscribeProtocol.SAMPLE_RATE, ::onChunk,
-        { if (!released) interruptedInput = true; main.post { terminalFailure("Microphone unavailable; input may be partial") } },
+        {
+            if (buffer.fail()) {
+                interruptedInput = true
+                main.post { terminalFailure("Microphone unavailable; input may be partial") }
+            }
+        },
     ) { level ->
         if (!done && !released) {
             if (level > peakLevel) peakLevel = level
@@ -47,7 +52,7 @@ class SttStream(
     private val captureDeadline = Runnable { terminalFailure("Dictation limit reached; please retry with a shorter utterance") }
     val peak get() = peakLevel
     val durationMs get() = buffer.size() * 1000L / (TranscribeProtocol.SAMPLE_RATE * 2)
-    val usableRecording get() = released && !interruptedInput
+    val usableRecording get() = released && !interruptedInput && !buffer.failed()
 
     fun start(): Boolean {
         TurnMetrics.event("turn_start", turnId, "mode" to 1L, "warm" to 0L, "ready" to 0L, "connection" to 0L)
@@ -83,6 +88,10 @@ class SttStream(
                 }
                 main.post {
                     if (done || transcriber !== t) return@post
+                    if (buffer.failed() || interruptedInput) {
+                        terminalFailure("Input may be partial; please try again")
+                        return@post
+                    }
                     if (!released) {
                         terminalFailure("Transcription ended before release; input may be partial")
                         return@post
@@ -95,7 +104,7 @@ class SttStream(
                 }
             }
             override fun onFailure(message: String) {
-                if (!released) interruptedInput = true
+                if (buffer.fail()) interruptedInput = true
                 main.post { terminalFailure(message) }
             }
             override fun onMetric(name: String, stats: SocketPump.Stats) {
@@ -121,12 +130,13 @@ class SttStream(
     suspend fun finish(): String? {
         if (!released) {
             TurnMetrics.event("release", turnId)
-            released = true
             main.removeCallbacks(captureDeadline)
             val accepted = buffer.release {
+                released = true // capture is already closed under the same buffer monitor
                 TurnMetrics.event("release_gate_closed", turnId)
                 transcriber?.send(TranscribeProtocol.COMMIT) == true
             }
+            released = true
             mic.stop()
             if (!accepted && !done) terminalFailure("Dictation send failed; input may be partial")
         }
@@ -161,7 +171,7 @@ class SttStream(
     private fun terminalFailure(message: String) {
         if (done) return
         done = true
-        if (!released) interruptedInput = true
+        if (!released || buffer.failed()) interruptedInput = true
         buffer.stop() // fence the capture thread before stopping AudioRecord
         main.removeCallbacks(captureDeadline)
         mic.stop()

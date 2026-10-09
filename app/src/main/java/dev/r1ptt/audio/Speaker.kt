@@ -26,7 +26,7 @@ class Speaker(
     /** Sample rate of raw PCM replies; a WAV reply's own header overrides it. */
     sampleRate: Int,
 ) {
-    private val sentences = LinkedBlockingQueue<String>(32)
+    private val sentences = SpeechQueue(32, 16_384)
     private val chunks = LinkedBlockingQueue<ByteArray>(32) // <= ~256 KiB plus one writer chunk
 
     @Volatile private var rate = sampleRate
@@ -46,7 +46,7 @@ class Speaker(
     }
 
     fun say(text: String) {
-        if (text.isNotBlank() && !stopped && (text.length > 16_384 || !sentences.offer(text))) {
+        if (text.isNotBlank() && !stopped && fetching && sentences.offer(text) == SpeechQueue.Admission.FULL) {
             throw IOException("Speech queue full")
         }
     }
@@ -57,16 +57,16 @@ class Speaker(
             if (completed) true else { onDone = done; false }
         }
         if (alreadyDone) { if (!stopped) done(error); return }
-        if (!sentences.offer(END_TEXT)) throw IOException("Speech queue full")
+        sentences.finish()
     }
 
     /** Silences immediately; [finish]'s callback won't run. */
     fun stop() {
         if (stopped) return
         stopped = true
-        sentences.clear()
+        fetching = false
+        sentences.close()
         chunks.clear()
-        sentences.offer(END_TEXT) // wake both threads
         chunks.offer(END_PCM)
         call?.cancel()
         synchronized(playback) { track?.let { runCatching { it.pause(); it.flush() } } }
@@ -76,13 +76,12 @@ class Speaker(
         var first = true
         try {
             while (!stopped && fetching) {
-                val text = sentences.take()
-                if (text === END_TEXT) break
+                val text = sentences.take() ?: break
                 try {
                     fetch(text, first)
                     first = false
                 } catch (e: IOException) {
-                    if (!stopped) error = "Speech failed: ${friendly(e)}"
+                    if (!stopped && error == null) error = "Speech failed: ${friendly(e)}"
                     break // a failing voice service fails every sentence; the text is on screen anyway
                 }
             }
@@ -93,8 +92,10 @@ class Speaker(
     }
 
     private fun fetch(text: String, firstSentence: Boolean) {
+        if (stopped || !fetching) return
         val c = newCall(text)
         call = c
+        if (stopped || !fetching) { c.cancel(); return }
         c.execute().use { resp ->
             if (!resp.isSuccessful) throw ApiError(resp.code, errorMessage(resp.body?.string().orEmpty()))
             val ins = resp.body?.byteStream() ?: return
@@ -173,6 +174,10 @@ class Speaker(
             fetching = false
             call?.cancel()
         } finally {
+            // Playback can fail before finish() arrives, while fetch is blocked in take().
+            fetching = false
+            sentences.close()
+            call?.cancel()
             track = null
             t?.let { runCatching { it.release() } }
             val done = synchronized(completion) { completed = true; onDone.also { onDone = null } }
@@ -202,7 +207,6 @@ class Speaker(
     }
 
     private companion object {
-        val END_TEXT = String(charArrayOf('\u0000'))
         val END_PCM = ByteArray(0)
     }
 }

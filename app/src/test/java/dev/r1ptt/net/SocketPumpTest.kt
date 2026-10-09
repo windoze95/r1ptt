@@ -112,4 +112,16 @@ class SocketPumpTest {
         val rejected = Fixture(); rejected.pump.bind(rejected.wire); rejected.wire.reject = true
         assertFalse(rejected.pump.handshake("START")); assertEquals(1, rejected.failures.size)
     }
+    @Test fun lateAcknowledgementCannotBeatDeadlineWhileWatchdogIsDescheduled() {
+        val f = Fixture(); f.pump.bind(f.wire); f.pump.offer("audio")
+        f.now = 100
+        assertFalse(f.pump.acknowledge()); assertTrue(f.wire.sent.isEmpty()); assertEquals(1, f.failures.size)
+    }
+    @Test fun laterOfferCannotDrainExpiredAudioBeforeWatchdogPollRuns() {
+        val f = Fixture(); f.pump.bind(f.wire); f.pump.acknowledge()
+        f.pump.offer("a".repeat(64)); f.pump.offer("b".repeat(40))
+        f.now = 100; f.wire.bytes = 0
+        assertFalse(f.pump.offer("new")); assertEquals(listOf("a".repeat(64)), f.wire.sent)
+        assertEquals(1, f.failures.size)
+    }
 }

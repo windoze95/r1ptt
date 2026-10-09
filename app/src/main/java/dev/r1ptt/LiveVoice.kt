@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import dev.r1ptt.audio.MicStream
+import dev.r1ptt.audio.CaptureAdmission
 import dev.r1ptt.audio.PcmPlayer
 import dev.r1ptt.audio.Recorder
 import dev.r1ptt.data.Config
@@ -29,8 +30,7 @@ class LiveVoice(
     @Volatile private var session: LiveSession? = null
     private var mic: MicStream? = null
     private val micLock = Any()
-    private var captureGeneration = 0L
-    private var captureOpen = false
+    private val capture = CaptureAdmission()
     private var streaming = false
     private val preRoll = ArrayList<ByteArray>()
     private val held = ArrayDeque<Pair<Long, ByteArray>>()
@@ -66,11 +66,11 @@ class LiveVoice(
         val warm = session?.takeIf { !it.gone }
         TurnMetrics.event("turn_start", turnId, "mode" to 0L, "warm" to if (warm != null) 1L else 0L,
             "ready" to if (warm?.started == true) 1L else 0L, "connection" to (warm?.id ?: 0L))
-        val generation = synchronized(micLock) { captureOpen = true; captureGeneration }
+        val generation = synchronized(micLock) { capture.begin() }
         val m = MicStream(LiveProtocol.SAMPLE_RATE,
             { pcm -> onMicChunk(generation, pcm) },
-            { main.post { if (synchronized(micLock) { captureOpen && generation == captureGeneration }) failExchange("Microphone unavailable") } },
-        ) { if (synchronized(micLock) { captureOpen && generation == captureGeneration }) level = it }
+            { captureFailed(generation, "Microphone unavailable; input may be partial") },
+        ) { if (synchronized(micLock) { capture.accepts(generation) }) level = it }
         mic = if (m.start()) m else null
         if (mic == null) { stopCapture(); TurnMetrics.event("session_failed", turnId); settled() }
         return mic != null
@@ -78,6 +78,7 @@ class LiveVoice(
 
     fun holdStart() {
         if (mic == null) return
+        synchronized(micLock) { capture.failure() }?.let { failExchange(it); return }
         flushExchange()
         tracker.reset()
         tracker.hold()
@@ -101,7 +102,7 @@ class LiveVoice(
         if (!active) { stopCapture(); return }
         TurnMetrics.event("release", turnId)
         // Close admission before stopping AudioRecord, then append MUTE behind accepted PCM.
-        stopCapture(release = true)
+        stopCapture(release = true)?.let { failExchange(it); return }
         val s = session ?: return failExchange("Voice connection closed; input may be partial")
         if (!s.send(LiveProtocol.MUTE)) return
         tracker.release()
@@ -126,26 +127,33 @@ class LiveVoice(
     fun screenOff() { if (!busy) closeSession() }
     fun reset() { stopExchange(save = true, close = true); settled() }
 
-    private fun stopCapture(release: Boolean = false) {
+    private fun stopCapture(release: Boolean = false): String? {
         val m = mic
-        synchronized(micLock) {
-            captureOpen = false
-            captureGeneration++
+        val fault = synchronized(micLock) {
+            val failure = capture.close()
             streaming = false
             preRoll.clear()
+            failure
         }
         if (release) TurnMetrics.event("release_gate_closed", turnId)
         mic = null
         m?.stop()
+        return fault
+    }
+
+    private fun captureFailed(generation: Long, message: String) {
+        val failed = synchronized(micLock) { capture.fail(generation, message) }
+        if (failed) main.post {
+            if (synchronized(micLock) { capture.current(generation) }) failExchange(message)
+        }
     }
 
     private fun onMicChunk(generation: Long, pcm: ByteArray) = synchronized(micLock) {
-        if (!captureOpen || generation != captureGeneration) return@synchronized
+        if (!capture.accepts(generation)) return@synchronized
         if (streaming) session?.send(LiveProtocol.append(pcm))
         else if (preRoll.size < MAX_PREROLL_CHUNKS) preRoll += pcm
         else {
-            captureOpen = false
-            main.post { if (generation == captureGeneration) failExchange("Audio pre-roll full; input may be partial") }
+            captureFailed(generation, "Audio pre-roll full; input may be partial")
         }
     }
 

@@ -10,6 +10,8 @@ import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 /** Real OkHttp/WebSocket terminal paths, entirely on loopback with a fixture API key. */
@@ -93,5 +95,36 @@ class SessionSocketTest {
         s.connect("broken-fixture-url", "fixture-secret", "{}"); s.close()
         assertTrue(s.terminal); assertEquals(1, ends); assertEquals(1, failures.size)
         assertFalse(failures.single().contains("fixture"))
+    }
+    @Test fun protocolFailureObserverRunsAfterSocketMonitorIsReleased() {
+        val done = CountDownLatch(1); val observerFree = AtomicBoolean(false)
+        lateinit var s: SessionSocket
+        Peer { it.text("fixture-server-error") }.use { peer ->
+            s = SessionSocket(clock, { s.reject("Fixture protocol failure") }, {
+                val sender = CountDownLatch(1)
+                thread(isDaemon = true) { s.send("late"); sender.countDown() }
+                observerFree.set(sender.await(1, TimeUnit.SECONDS))
+                done.countDown()
+            })
+            s.connect(peer.url, "fixture", "{}")
+            assertTrue(done.await(3, TimeUnit.SECONDS)); assertTrue(observerFree.get()); s.close()
+        }
+    }
+    @Test fun watchdogFailureObserverAlsoRunsAfterSocketMonitorIsReleased() {
+        val now = AtomicLong(); val done = CountDownLatch(1); val releasePeer = CountDownLatch(1)
+        val observerFree = AtomicBoolean(false)
+        lateinit var s: SessionSocket
+        Peer { releasePeer.await(3, TimeUnit.SECONDS) }.use { peer ->
+            s = SessionSocket(now::get, {}, {
+                val sender = CountDownLatch(1)
+                thread(isDaemon = true) { s.send("late"); sender.countDown() }
+                observerFree.set(sender.await(1, TimeUnit.SECONDS))
+                done.countDown()
+            })
+            s.connect(peer.url, "fixture", "{}")
+            assertTrue(peer.opened.await(3, TimeUnit.SECONDS)); now.set(30_000)
+            assertTrue(done.await(3, TimeUnit.SECONDS)); assertTrue(observerFree.get())
+            releasePeer.countDown(); s.close()
+        }
     }
 }

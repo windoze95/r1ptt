@@ -38,6 +38,7 @@ class SocketPump(
     /** Handshake is deliberately separate from a TCP/WebSocket connection. */
     @Synchronized fun acknowledge(): Boolean {
         if (terminal || wire == null) return false
+        if (!ready && connectingAt?.let { clock() - it >= timeoutMs } == true) return reject("Voice connection timed out")
         if (!ready) { ready = true; progressAt = clock() }
         drain()
         return !terminal
@@ -104,6 +105,7 @@ class SocketPump(
         if (!ready || terminal) return
         while (pending.isNotEmpty()) {
             val entry = pending.first()
+            if (clock() - entry.at >= timeoutMs) { reject("Queued voice input expired; input may be partial"); return }
             if (target.queuedBytes() > windowBytes - entry.bytes) break
             if (!target.send(entry.text)) { reject("Voice send failed; input may be partial"); return }
             pending.removeFirst()

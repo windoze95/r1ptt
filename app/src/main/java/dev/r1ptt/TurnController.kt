@@ -342,7 +342,7 @@ class TurnController(private val app: App) : Gestures.Listener {
             handleTranscript(turn, text)
         } finally {
             s.cancel()
-            target?.keepPartial() // interrupted or failed: the words shown so far stay
+            if (current === turn) target?.keepPartial() // a superseded turn cannot change the new provisional span
         }
     }
 

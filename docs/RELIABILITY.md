@@ -44,9 +44,16 @@ Mic callbacks must cross the capture gate. Release closes it before stopping Aud
 accepted append can follow the end command. Dictation records at most two minutes of PCM with
 at most ten seconds of pre-roll, and stops when its capture/transport fails. Partial callbacks
 from a superseded press cannot alter the next text field or turn. An interrupted/incomplete
-recording is never automatically submitted. The existing recording fallback remains available
-only after a complete local release; this can duplicate transcription work if the remote commit
-was accepted but its final result was lost, as before. It does not automatically submit a chat.
+recording is never automatically submitted.
+
+Capture failures are latched under that same gate before a UI callback is posted: release refuses
+to commit a faulted capture even if the callback has not run, and final transcripts cannot override
+that fault. Errors from an intentionally stopped microphone after the release barrier are ignored.
+
+The existing recording fallback remains available only after a complete local release; this can
+duplicate transcription work if the remote commit
+was accepted but its final result was lost, as before. Keyboard-open dictation still waits for a
+deliberate send; keyboard-closed transcription mode hands a complete transcript to the backend.
 
 The network-to-main voice handoff is capped at eight seconds of PCM-equivalent bytes and 256
 callbacks; dictation's text handoff is capped at 128 KiB and 256 callbacks. Per-exchange live
@@ -61,6 +68,10 @@ retains its existing minimum 250 ms buffer and 100 ms amplifier warm-up pad. A w
 three-second output stall fails the exchange. The live player releases its track after idle.
 Typed TTS has bounded 32-sentence and 32-chunk queues with cancellable backpressure; it does not
 share GPT-Live's transport or first-playback telemetry.
+Playback termination closes sentence admission, wakes a blocked fetch worker and cancels its call
+before a late finish callback arrives. Normal finish drains already admitted sentences in order.
+Socket termination is recorded under its monitor, then failure observers are called after releasing
+that monitor, so a synchronous capture-fault latch cannot deadlock a simultaneous microphone send.
 
 ## Secure configuration persistence
 
