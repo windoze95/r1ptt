@@ -10,6 +10,7 @@ import dev.r1ptt.net.friendly
 import okhttp3.Call
 import java.io.IOException
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.math.max
 
@@ -25,8 +26,8 @@ class Speaker(
     /** Sample rate of raw PCM replies; a WAV reply's own header overrides it. */
     sampleRate: Int,
 ) {
-    private val sentences = LinkedBlockingQueue<String>()
-    private val chunks = LinkedBlockingQueue<ByteArray>()
+    private val sentences = SpeechQueue(32, 16_384)
+    private val chunks = LinkedBlockingQueue<ByteArray>(32) // <= ~256 KiB plus one writer chunk
 
     @Volatile private var rate = sampleRate
     @Volatile private var stopped = false
@@ -35,6 +36,9 @@ class Speaker(
     @Volatile private var track: AudioTrack? = null
     @Volatile private var error: String? = null
     @Volatile private var onDone: ((String?) -> Unit)? = null
+    private val completion = Any()
+    private var completed = false
+    private val playback = Any()
 
     fun start() {
         thread(name = "tts-fetch") { fetchLoop() }
@@ -42,50 +46,56 @@ class Speaker(
     }
 
     fun say(text: String) {
-        if (text.isNotBlank() && !stopped) sentences.put(text)
+        if (text.isNotBlank() && !stopped && fetching && sentences.offer(text) == SpeechQueue.Admission.FULL) {
+            throw IOException("Speech queue full")
+        }
     }
 
     /** No more sentences. [done] runs on the play thread once everything has been heard. */
     fun finish(done: (error: String?) -> Unit) {
-        onDone = done
-        sentences.put(END_TEXT)
+        val alreadyDone = synchronized(completion) {
+            if (completed) true else { onDone = done; false }
+        }
+        if (alreadyDone) { if (!stopped) done(error); return }
+        sentences.finish()
     }
 
     /** Silences immediately; [finish]'s callback won't run. */
     fun stop() {
         if (stopped) return
         stopped = true
-        sentences.clear()
+        fetching = false
+        sentences.close()
         chunks.clear()
-        sentences.offer(END_TEXT) // wake both threads
         chunks.offer(END_PCM)
         call?.cancel()
-        track?.let { runCatching { it.pause(); it.flush() } }
+        synchronized(playback) { track?.let { runCatching { it.pause(); it.flush() } } }
     }
 
     private fun fetchLoop() {
         var first = true
         try {
             while (!stopped && fetching) {
-                val text = sentences.take()
-                if (text === END_TEXT) break
+                val text = sentences.take() ?: break
                 try {
                     fetch(text, first)
                     first = false
                 } catch (e: IOException) {
-                    if (!stopped) error = "Speech failed: ${friendly(e)}"
+                    if (!stopped && error == null) error = "Speech failed: ${friendly(e)}"
                     break // a failing voice service fails every sentence; the text is on screen anyway
                 }
             }
         } catch (_: InterruptedException) {
         } finally {
-            chunks.put(END_PCM)
+            if (!queueChunk(END_PCM)) chunks.offer(END_PCM)
         }
     }
 
     private fun fetch(text: String, firstSentence: Boolean) {
+        if (stopped || !fetching) return
         val c = newCall(text)
         call = c
+        if (stopped || !fetching) { c.cancel(); return }
         c.execute().use { resp ->
             if (!resp.isSuccessful) throw ApiError(resp.code, errorMessage(resp.body?.string().orEmpty()))
             val ins = resp.body?.byteStream() ?: return
@@ -109,9 +119,15 @@ class Speaker(
                     carry = data.last().toInt() and 0xff
                     data = data.copyOf(data.size - 1)
                 }
-                if (data.isNotEmpty()) chunks.put(data)
+                if (data.isNotEmpty() && !queueChunk(data)) break
             }
         }
+    }
+
+    /** Backpressure is cancellable even when playback failed and the bounded queue is full. */
+    private fun queueChunk(chunk: ByteArray): Boolean {
+        while (!stopped && fetching) if (chunks.offer(chunk, 100, TimeUnit.MILLISECONDS)) return true
+        return false
     }
 
     private fun playLoop() {
@@ -132,10 +148,15 @@ class Speaker(
                     frames += pad.size / 2
                 }
                 var off = 0
+                var progressAt = SystemClock.elapsedRealtime()
                 while (off < chunk.size && !stopped) {
-                    val w = t.write(chunk, off, chunk.size - off)
+                    val w = synchronized(playback) {
+                        if (stopped) 0 else t.write(chunk, off, minOf(chunk.size - off, r / 25 * 2), AudioTrack.WRITE_NON_BLOCKING)
+                    }
                     if (w < 0) throw IOException("AudioTrack write failed: $w")
+                    if (SystemClock.elapsedRealtime() - progressAt >= 3000) throw IOException("Audio output stalled")
                     off += w
+                    if (w > 0) progressAt = SystemClock.elapsedRealtime() else Thread.sleep(5)
                 }
                 frames += chunk.size / 2
             }
@@ -153,9 +174,14 @@ class Speaker(
             fetching = false
             call?.cancel()
         } finally {
+            // Playback can fail before finish() arrives, while fetch is blocked in take().
+            fetching = false
+            sentences.close()
+            call?.cancel()
             track = null
             t?.let { runCatching { it.release() } }
-            if (!stopped) onDone?.invoke(error)
+            val done = synchronized(completion) { completed = true; onDone.also { onDone = null } }
+            if (!stopped) done?.invoke(error)
         }
     }
 
@@ -181,7 +207,6 @@ class Speaker(
     }
 
     private companion object {
-        val END_TEXT = String(charArrayOf('\u0000'))
         val END_PCM = ByteArray(0)
     }
 }

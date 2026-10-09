@@ -17,6 +17,7 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import dev.r1ptt.data.Config
+import dev.r1ptt.data.ConfigPersistenceException
 import dev.r1ptt.power.DeviceSettings
 import org.json.JSONObject
 
@@ -60,6 +61,18 @@ class SettingsActivity : Activity() {
             setBackgroundColor(getColor(R.color.bg))
             addView(root)
         })
+
+        app.store.loadError?.let { error ->
+            header("Settings recovery")
+            root.addView(TextView(this).apply {
+                text = error
+                setTextColor(getColor(R.color.fg))
+            })
+            root.addView(button("Retry loading settings") {
+                if (app.store.retryReload()) recreate()
+                else Toast.makeText(this, app.store.loadError, Toast.LENGTH_LONG).show()
+            })
+        }
 
         header("Backend")
         val group = RadioGroup(this)
@@ -169,7 +182,12 @@ class SettingsActivity : Activity() {
                 cellular = cellular.isChecked,
             ),
         )
-        val saved = app.store.update { cfg }
+        val saved = try {
+            app.store.update { cfg }
+        } catch (e: ConfigPersistenceException) {
+            Toast.makeText(this, e.message, Toast.LENGTH_LONG).show()
+            return
+        }
         DeviceSettings.apply(saved)
         app.radio.applyBaseline()
         toast("Saved")

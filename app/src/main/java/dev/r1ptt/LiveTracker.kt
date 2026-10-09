@@ -10,6 +10,7 @@ class LiveTracker(
     private val clock: () -> Long,
     private val quietMs: Long = 1200,
     private val noReplyMs: Long = 20_000,
+    private val maxExchangeMs: Long = 120_000,
 ) {
     enum class Phase { IDLE, LISTENING, WAITING, LOOKING_UP, SPEAKING }
 
@@ -20,8 +21,10 @@ class LiveTracker(
     private var gotReply = false
     private var delegations = 0
     private var searching = false
+    private var startedAt = -1L
 
     fun hold() {
+        startedAt = clock()
         holding = true
     }
 
@@ -63,9 +66,13 @@ class LiveTracker(
         gotReply = false
         delegations = 0
         searching = false
+        startedAt = -1L
     }
 
     val lookingUpWeb: Boolean get() = searching
+
+    /** Bound even a held button, stuck delegation, or endless silence/audio stream. */
+    fun expired(): Boolean = startedAt >= 0 && clock() - startedAt >= maxExchangeMs
 
     fun phase(playing: Boolean): Phase {
         val now = clock()
