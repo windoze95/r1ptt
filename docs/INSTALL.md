@@ -1,4 +1,4 @@
-# Installing r1ptt on a stock R1
+# Installing robotOS on a stock R1
 
 This takes about an hour of hands-on time once Rabbit has approved developer mode.
 

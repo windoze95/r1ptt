@@ -1,4 +1,4 @@
-# r1ptt: push-to-talk firmware for the Rabbit R1
+# robotOS: push-to-talk firmware for the Rabbit R1
 
 Turns a Rabbit R1 into a single-purpose push-to-talk terminal for an AI. Hold the side button and
 talk; on release, it either sends what you said or types it into the text field:
@@ -13,6 +13,10 @@ talk; on release, it either sends what you said or types it into the text field:
 
 The backends are ChatGPT (an OpenAI API key, the default), **OpenClaw**, **Hermes Agent**, or any
 other OpenAI-compatible server.
+
+robotOS was previously called R1 PTT. The repository remains `windoze95/r1ptt`; the Android
+package (`dev.r1ptt`), Magisk module ID (`r1ptt_system`), and existing configuration and build
+filenames retain their compatibility names.
 
 > **Status: running on a real R1** (LineageOS 21 on Rabbit's September 2026 kernel). The side button,
 > speech-to-speech voice turns and live dictation are verified on the device (final text ~0.4 s after
@@ -32,7 +36,7 @@ The R1 is an Android 13 phone underneath (MediaTek MT6765). The firmware is four
 | Kernel + vendor | Rabbit's own, kept from the R1's last OTA (the side button only works with Rabbit's kernel). |
 | System | LineageOS 21 (Android 14) GSI, with Rabbit's apps removed and the bloat disabled. |
 | Root + tweaks | Magisk, plus the `r1ptt-system` module: button and wheel remaps, Rabbit's USB keyboard/mouse mode off, no scanning/location/Bluetooth, faster Doze. |
-| App | `dev.r1ptt`: the launcher, push-to-talk service, speech, chat and power policy. |
+| App | robotOS (`dev.r1ptt`): the launcher, push-to-talk service, speech, chat and power policy. |
 
 ## Using it
 

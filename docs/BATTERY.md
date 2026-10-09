@@ -10,7 +10,7 @@ arithmetic:
 
 So the work goes into making idle as close to "everything off" as possible.
 
-## What r1ptt does
+## What robotOS does
 
 | Drain | Approach |
 |---|---|
