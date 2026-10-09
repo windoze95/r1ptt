@@ -14,9 +14,10 @@ talk; on release, it either sends what you said or types it into the text field:
 The backends are ChatGPT (an OpenAI API key, the default), **OpenClaw**, **Hermes Agent**, or any
 other OpenAI-compatible server.
 
-robotOS was previously called R1 PTT. The repository remains `windoze95/r1ptt`; the Android
-package (`dev.r1ptt`), Magisk module ID (`r1ptt_system`), and existing configuration and build
-filenames retain their compatibility names.
+robotOS was previously called R1 PTT. Its repository is
+[windoze95/robotOS](https://github.com/windoze95/robotOS). The Android package (`dev.r1ptt`),
+Magisk module ID (`r1ptt_system`), and existing configuration and build filenames retain their
+compatibility names.
 
 > **Status: running on a real R1** (LineageOS 21 on Rabbit's September 2026 kernel). The side button,
 > speech-to-speech voice turns and live dictation are verified on the device (final text ~0.4 s after
