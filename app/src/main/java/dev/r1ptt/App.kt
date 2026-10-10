@@ -4,6 +4,8 @@ import android.app.Application
 import dev.r1ptt.data.BatteryLog
 import dev.r1ptt.data.ConfigStore
 import dev.r1ptt.data.History
+import dev.r1ptt.messages.SmsController
+import dev.r1ptt.messages.SmsAssistant
 import dev.r1ptt.power.RadioPolicy
 import dev.r1ptt.power.ScreenPolicy
 import dev.r1ptt.update.UpdateManager
@@ -13,6 +15,10 @@ import dev.r1ptt.update.UpdateManager
  * the always-on [PttService] share these instances.
  */
 class App : Application() {
+    private val smsInstance = lazy { SmsController(this) }
+    val sms: SmsController get() = smsInstance.value
+    val smsBusy: Boolean get() = smsInstance.isInitialized() && smsInstance.value.busy
+    val smsAssistant by lazy { SmsAssistant(this) }
     lateinit var store: ConfigStore
         private set
     lateinit var history: History

@@ -57,6 +57,21 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    testOptions.unitTests {
+        isIncludeAndroidResources = true
+        all { test -> test.jvmArgs(
+            "--add-opens=java.base/java.lang=ALL-UNNAMED",
+            "--add-opens=java.base/java.util=ALL-UNNAMED",
+            "--add-opens=java.base/java.io=ALL-UNNAMED",
+            "--add-opens=java.base/java.net=ALL-UNNAMED",
+            "--add-opens=java.base/java.security=ALL-UNNAMED",
+            "--add-opens=java.base/java.text=ALL-UNNAMED",
+            "--add-opens=java.base/jdk.internal.access=ALL-UNNAMED",
+            "--add-opens=java.desktop/java.awt.font=ALL-UNNAMED",
+            "--add-opens=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+        ) }
+    }
 }
 
 dependencies {
@@ -66,4 +81,5 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // Real org.json for JVM tests (android.jar only ships stubs).
     testImplementation("org.json:json:20240303")
+    testImplementation("org.robolectric:robolectric:4.17")
 }

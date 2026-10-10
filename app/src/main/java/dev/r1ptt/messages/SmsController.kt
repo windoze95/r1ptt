@@ -1,0 +1,231 @@
+package dev.r1ptt.messages
+
+import android.Manifest
+import android.app.Activity
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.provider.Telephony
+import android.telephony.SmsManager
+import android.telephony.SmsMessage
+import android.telephony.SubscriptionManager
+import android.telephony.TelephonyManager
+import dev.r1ptt.App
+import dev.r1ptt.R
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import java.security.MessageDigest
+import java.util.concurrent.Executors
+
+class SmsReview internal constructor(
+    val draft: SmsDraft,
+    val record: SmsRecord,
+    val texts: List<String>,
+    val simLabel: String,
+)
+data class MessagesSnapshot(val draft: SmsDraft, val threads: List<SmsThread>, val messages: List<SmsRecord>)
+
+/** No network client, AI History, automatic retries, polling service, or radio-idle override. */
+class SmsController(
+    private val app: App,
+    private val transport: SmsTransport = AndroidSmsTransport(app),
+    private val cellularEnabled: () -> Boolean = { app.store.value.power.cellular },
+) {
+    private val db = SmsStore(app)
+    private val worker = Executors.newSingleThreadExecutor()
+    private val main = Handler(Looper.getMainLooper())
+    private val prefs = app.getSharedPreferences("messages", 0)
+    private val _revision = MutableStateFlow(0L)
+    val revision: StateFlow<Long> = _revision
+    @Volatile private var dispatching = false
+    @Volatile private var pendingUntil = 0L
+    private val pending = mutableMapOf<String, Long>() // owned by the worker
+    val busy: Boolean get() = dispatching || SystemClock.elapsedRealtime() < pendingUntil
+
+    val supported: Boolean get() = app.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY_MESSAGING)
+    fun permitted(permission: String) = app.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+    val canSend: Boolean get() = supported && permitted(Manifest.permission.SEND_SMS)
+    var receiveEnabled: Boolean
+        get() = prefs.getBoolean("receive", false)
+        set(value) { prefs.edit().putBoolean("receive", value).apply() }
+
+    fun load(peer: String?, done: (MessagesSnapshot?, String?) -> Unit) = worker.execute {
+        try {
+            val snapshot = MessagesSnapshot(db.draft(), db.threads(), if (peer == null) emptyList() else db.conversation(peer))
+            if (peer != null) db.markRead(peer)
+            main.post { done(snapshot, null) }
+        } catch (_: Exception) { main.post { done(null, "Messages could not be opened. Your stored data has been kept.") } }
+    }
+
+    fun saveDraft(draft: SmsDraft, failed: () -> Unit = {}) = worker.execute {
+        try { db.saveDraft(draft) } catch (_: Exception) { main.post { failed() } }
+    }
+
+    fun recipients(done: (List<SmsRecipient>?, String?) -> Unit) = worker.execute {
+        try { val saved = db.recipients(); main.post { done(saved, null) } }
+        catch (_: Exception) { main.post { done(null, "Saved recipients could not be opened.") } }
+    }
+
+    fun saveRecipient(name: String, number: String, done: (Boolean) -> Unit) = worker.execute {
+        val saved = runCatching { db.addRecipient(name, number) }.isSuccess
+        main.post { done(saved) }
+    }
+
+    fun removeRecipient(id: Long, done: () -> Unit) = worker.execute {
+        runCatching { db.removeRecipient(id) }
+        main.post { done() }
+    }
+
+    /** Preparation is local. The only transport call is in send(), after the review button. */
+    fun prepare(draft: SmsDraft): SmsReview {
+        check(canSend) { "Enable SMS sending first." }
+        check(cellularEnabled()) { "Turn on Use cellular data (SIM) in robotOS settings first." }
+        val peer = requireNotNull(SmsAddress.normalize(draft.peer)) { "Enter one phone number, including its country code when needed." }
+        val body = draft.body.trim()
+        require(body.isNotEmpty() && body.length <= SmsRecord.MAX_DRAFT_CHARS) { "Enter a message of up to ${SmsRecord.MAX_DRAFT_CHARS} characters." }
+        val sub = SubscriptionManager.getDefaultSmsSubscriptionId()
+        check(SubscriptionManager.isValidSubscriptionId(sub)) { "Choose a default SMS SIM in Android settings first." }
+        val texts = transport.divide(body, sub)
+        require(texts.size in 1..SmsRecord.MAX_PARTS) { "This text needs more than ${SmsRecord.MAX_PARTS} SMS parts. Shorten it first." }
+        val slot = SubscriptionManager.getSlotIndex(sub)
+        val carrier = runCatching { app.getSystemService(TelephonyManager::class.java).createForSubscriptionId(sub).networkOperatorName }
+            .getOrNull().orEmpty()
+        val label = listOfNotNull("Default SMS SIM", if (slot >= 0) "slot ${slot + 1}" else null, carrier.takeIf { it.isNotBlank() }).joinToString(" · ")
+        return SmsReview(draft, SmsRecord.outgoing(peer, body, sub, texts.size, System.currentTimeMillis()), texts, label)
+    }
+
+    /** Consumes one reviewed attempt. Persist first; a crash can never cause an automatic resend. */
+    fun send(review: SmsReview, done: (Boolean, String) -> Unit) {
+        if (dispatching || app.updates.installing || app.turns.busy) {
+            done(false, "Finish the current action before sending."); return
+        }
+        if (!canSend || !cellularEnabled() || SubscriptionManager.getDefaultSmsSubscriptionId() != review.record.subscriptionId) {
+            done(false, "SMS access or the selected SIM changed. Review the text again."); return
+        }
+        dispatching = true
+        // Restore only radios robotOS put to sleep. Android's SMS service owns the actual send;
+        // SMS does not wait for internet, and the normal screen-off idle alarm still applies.
+        app.radio.onActivity()
+        worker.execute {
+            var persisted = false
+            try {
+                check(canSend && !app.updates.installing && cellularEnabled())
+                check(SubscriptionManager.getDefaultSmsSubscriptionId() == review.record.subscriptionId)
+                val record = review.record.copy(createdAt = System.currentTimeMillis())
+                db.outgoing(record, review.draft)
+                persisted = true
+                pending.entries.removeAll { it.value <= SystemClock.elapsedRealtime() }
+                pending[record.id] = SystemClock.elapsedRealtime() + SmsRecord.SEND_WAIT_MS
+                pendingUntil = pending.values.maxOrNull() ?: 0L
+                val sent = ArrayList(record.parts.indices.map { callback(record, it, false) })
+                val delivered = ArrayList(record.parts.indices.map { callback(record, it, true) })
+                transport.send(record, review.texts, sent, delivered)
+                changed()
+                main.post { done(true, "Sending…") }
+            } catch (_: SecurityException) {
+                if (persisted) runCatching { failBeforeSend(review.record, SmsManager.RESULT_ERROR_GENERIC_FAILURE) }
+                main.post { done(persisted, "Android did not allow this text. Check SMS access; it was not retried.") }
+            } catch (_: IllegalArgumentException) {
+                if (persisted) runCatching { failBeforeSend(review.record, SmsManager.RESULT_ERROR_GENERIC_FAILURE) }
+                main.post { done(persisted, "Android rejected this text. It was not retried.") }
+            } catch (_: Exception) {
+                // A binder/transport exception after persistence may have happened after handoff.
+                // Leave that attempt uncertain; never report it as safely retryable.
+                changed()
+                main.post { done(persisted, if (persisted) "Send status is uncertain. Check with the recipient before trying again." else "The text could not be saved, so it was not sent.") }
+            } finally { dispatching = false }
+        }
+    }
+
+    private fun failBeforeSend(record: SmsRecord, error: Int) {
+        record.parts.indices.forEach { part -> db.update(SmsCallback(record.id, record.token, part, false)) { it.sent(part, false, error) } }
+        pending.remove(record.id)
+        pendingUntil = pending.values.maxOrNull() ?: 0L
+        changed()
+    }
+
+    private fun callback(record: SmsRecord, part: Int, delivery: Boolean): PendingIntent {
+        val id = SmsCallback(record.id, record.token, part, delivery)
+        val intent = Intent(app, SmsStatusReceiver::class.java).setData(Uri.parse(id.uri()))
+        // Delivery needs the system-supplied PDU. The component and complete identity are explicit.
+        val mutability = if (delivery) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
+        return PendingIntent.getBroadcast(app, 0, intent, mutability or PendingIntent.FLAG_UPDATE_CURRENT)
+    }
+
+    fun result(intent: Intent, resultCode: Int, finished: () -> Unit) = worker.execute {
+        try {
+            val callback = SmsCallback.parse(intent.dataString) ?: return@execute
+            var terminal = false
+            val updated = db.update(callback) { record ->
+                val next = if (!callback.delivery) record.sent(callback.part, resultCode == Activity.RESULT_OK, resultCode)
+                else record.delivered(callback.part, delivery(intent, resultCode))
+                terminal = next.parts.none { it.sent == SentPart.WAITING }
+                next
+            }
+            if (terminal) {
+                pending.remove(callback.id)
+                pendingUntil = pending.values.maxOrNull() ?: 0L
+            }
+            if (updated) changed()
+        } catch (_: Exception) { notifyPrivate("A text status could not be saved. Check Messages before retrying.") }
+        finally { finished() }
+    }
+
+    private fun delivery(intent: Intent, resultCode: Int): DeliveryPart {
+        if (resultCode != Activity.RESULT_OK) return DeliveryPart.UNKNOWN
+        val pdu = intent.getByteArrayExtra("pdu") ?: return DeliveryPart.UNKNOWN
+        val format = intent.getStringExtra("format")
+        if (pdu.size > 4096 || format !in setOf("3gpp", "3gpp2")) return DeliveryPart.UNKNOWN
+        val sms = runCatching { SmsMessage.createFromPdu(pdu, format) }.getOrNull() ?: return DeliveryPart.UNKNOWN
+        return SmsDelivery.classify(format, sms.isStatusReportMessage, sms.status)
+    }
+
+    fun receive(intent: Intent, finished: () -> Unit) = worker.execute {
+        try {
+            if (!receiveEnabled || !permitted(Manifest.permission.RECEIVE_SMS)) return@execute
+            val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)?.toList().orEmpty()
+            if (messages.isEmpty()) return@execute
+            val sender = messages.first().displayOriginatingAddress ?: return@execute
+            if (messages.any { it.displayOriginatingAddress != sender || it.displayMessageBody == null }) return@execute
+            val peer = SmsAddress.normalize(sender) ?: sender
+            val body = messages.joinToString("") { it.displayMessageBody }
+            val sub = intent.getIntExtra(SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX, intent.getIntExtra("subscription", -1))
+            val hash = MessageDigest.getInstance("SHA-256")
+            hash.update("$sub:".toByteArray())
+            messages.forEach { hash.update(it.pdu) }
+            val id = hash.digest().joinToString("") { "%02x".format(it) }
+            if (db.insert(SmsRecord(id, peer, body, System.currentTimeMillis(), sub, true))) {
+                changed()
+                notifyPrivate("New text in Messages")
+            }
+        } catch (_: Exception) { notifyPrivate("An incoming text could not be saved. Check available storage.") }
+        finally { finished() }
+    }
+
+    private fun changed() { _revision.value += 1 }
+
+    private fun notifyPrivate(message: String) {
+        if (!permitted(Manifest.permission.POST_NOTIFICATIONS)) return
+        runCatching {
+            val notifications = app.getSystemService(NotificationManager::class.java)
+            notifications.createNotificationChannel(NotificationChannel(CHANNEL, "Messages", NotificationManager.IMPORTANCE_DEFAULT)
+                .apply { lockscreenVisibility = Notification.VISIBILITY_SECRET })
+            val open = PendingIntent.getActivity(app, 0, Intent(app, MessagesActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            notifications.notify(NOTIFICATION, Notification.Builder(app, CHANNEL).setSmallIcon(R.drawable.ic_messages)
+                .setContentTitle("robotOS Messages").setContentText(message).setContentIntent(open)
+                .setVisibility(Notification.VISIBILITY_SECRET).setAutoCancel(true).build())
+        }
+    }
+
+    companion object {
+        private const val CHANNEL = "messages"
+        const val NOTIFICATION = 204
+    }
+}

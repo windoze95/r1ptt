@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="messages">Messages</string>
+    <string name="sms_missing_recipient">No saved number for %1$s. Enter the exact phone number before review.</string>
+    <string name="sms_draft_save_failed">Draft could not be saved. Keep this screen open and check storage.</string>
+    <string name="sms_finish_before_review">Finish dictation or the current action before review.</string>
+    <string name="sms_enable_sending">Enable SMS sending in Options first.</string>
+    <string name="sms_unavailable">SMS is unavailable on this installation. Your draft is kept.</string>
+    <string name="sms_unsupported">This Android installation does not offer SMS messaging.</string>
+    <string name="sms_assistant_enabled">Assistant SMS drafts enabled. Add names in Saved recipients.</string>
+    <string name="sms_recipient_saved">Recipient saved on this device.</string>
     <string name="app_name">robotOS</string>
     <string name="settings">Settings</string>
     <string name="updates">App updates</string>

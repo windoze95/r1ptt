@@ -18,6 +18,7 @@ import java.io.File
 /** One press owns its mic, callbacks and bounded recording; failures never replay partial input. */
 class SttStream(
     private val app: App,
+    private val config: dev.r1ptt.data.Config = app.store.value,
     private val onPartial: (String) -> Unit,
     private val onFailure: (String) -> Unit = {},
     private val onLevel: (Float) -> Unit,
@@ -57,7 +58,7 @@ class SttStream(
     fun start(): Boolean {
         TurnMetrics.event("turn_start", turnId, "mode" to 1L, "warm" to 0L, "ready" to 0L, "connection" to 0L)
         if (!mic.start()) { terminalFailure("Microphone unavailable"); return false }
-        val cfg = app.store.value
+        val cfg = config
         lateinit var t: LiveTranscriber
         t = LiveTranscriber(object : LiveTranscriber.Listener {
             override fun onDelta(text: String) {

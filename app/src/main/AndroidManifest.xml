@@ -16,6 +16,11 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- Requests only: the user must enable this source in Android settings and confirm each install. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Optional Messages access: requested only from the explicit Messages controls. -->
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <uses-feature android:name="android.hardware.telephony.messaging" android:required="false" />
 
     <application
         android:name=".App"
@@ -58,6 +63,15 @@
         <activity android:name=".update.UpdateActivity" android:exported="false"
             android:label="@string/updates" />
         <receiver android:name=".update.UpdateInstallReceiver" android:exported="false" />
+
+        <activity android:name=".messages.MessagesActivity" android:exported="false"
+            android:label="@string/messages"
+            android:windowSoftInputMode="adjustResize|stateHidden" />
+        <receiver android:name=".messages.SmsStatusReceiver" android:exported="false" />
+        <receiver android:name=".messages.SmsIncomingReceiver" android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter><action android:name="android.provider.Telephony.SMS_RECEIVED" /></intent-filter>
+        </receiver>
 
         <!-- Settings/API-key import over adb; only senders holding DUMP (adb shell, root) can reach it. -->
         <receiver

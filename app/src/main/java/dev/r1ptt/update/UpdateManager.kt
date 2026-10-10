@@ -170,7 +170,7 @@ class UpdateManager(private val app: App) {
         val bytes = signedMetadata ?: return
         val file = ready ?: return
         if (!app.packageManager.canRequestPackageInstalls()) return message("Allow update requests in Android settings first.")
-        if (!gate.begin(foreground, app.turns.busy)) return message("Install after your conversation is finished.")
+        if (!gate.begin(foreground, app.turns.busy || app.smsBusy)) return message("Install after voice and SMS sending have finished.")
         if (!app.turns.prepareForUpdate()) { gate.finish(); return message("Your conversation is still finishing. Try again shortly.") }
         val release = try {
             authenticate(bytes).also {
@@ -204,7 +204,7 @@ class UpdateManager(private val app: App) {
                         }
                     }
                 }
-                if (id != generation || !foreground || !installing || app.turns.busy)
+                if (id != generation || !foreground || !installing || app.turns.busy || app.smsBusy)
                     throw UpdateException("Update cancelled before installation.")
                 val callback = PendingIntent.getBroadcast(app, stagedId,
                     Intent(app, UpdateInstallReceiver::class.java).setAction(RESULT_ACTION),

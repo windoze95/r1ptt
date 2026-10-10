@@ -278,9 +278,11 @@ class LiveVoice(
     }
 
     private fun finishExchange() {
+        val smsDraft = app.smsAssistant.command(heard.toString().trim())
         stopCapture()
         scope.end()
-        flushExchange()
+        if (smsDraft == null) flushExchange()
+        else { heard.setLength(0); said.setLength(0); closeSession() }
         tracker.reset()
         active = false
         main.removeCallbacks(ticker)
@@ -288,6 +290,10 @@ class LiveVoice(
         publish(TurnState())
         scheduleClose()
         settled()
+        if (smsDraft != null) {
+            val opened = app.smsAssistant.open(smsDraft)
+            publish(TurnState(note = if (opened) "SMS draft opened · review it before sending" else "Couldn't open Messages. No text was sent."))
+        }
     }
 
     private fun failExchange(message: String) {
@@ -314,8 +320,10 @@ class LiveVoice(
     private fun clearHeld() { held.clear(); heldBytes = 0 }
     private fun flushExchange() {
         val q = heard.toString().trim(); val a = said.toString().trim()
-        if (q.isNotEmpty()) app.history.add(Msg.USER, q)
-        if (a.isNotEmpty()) app.history.add(Msg.ASSISTANT, a)
+        if (app.smsAssistant.command(q) == null) {
+            if (q.isNotEmpty()) app.history.add(Msg.USER, q)
+            if (a.isNotEmpty()) app.history.add(Msg.ASSISTANT, a)
+        }
         heard.setLength(0); said.setLength(0)
     }
     private fun scheduleClose() {
@@ -340,6 +348,7 @@ class LiveVoice(
         }.takeLast(2000)
         return buildString {
             append(cfg.systemPrompt)
+            append(app.smsAssistant.instructions())
             append(" The user holds a button while talking and lets go when finished.")
             if (recent.isNotBlank()) append("\n\nEarlier in this conversation:\n").append(recent)
         }

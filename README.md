@@ -50,17 +50,27 @@ The R1 is an Android 13 phone underneath (MediaTek MT6765). The firmware is four
 
 Tap the text field on the touchscreen to bring up the keyboard. The gear icon opens settings.
 
+The message icon opens **Messages**, an optional one-to-one SMS companion. Type a draft, or opt in
+to dictation and assistant commands such as “Text Yana that I’m on my way.” Saved names resolve
+locally; unknown or ambiguous recipients need your input. Every send requires recipient/message
+review and **Send SMS** on the device. Sending, new incoming texts, and assistant drafts each have
+explicit controls in Messages → Options. No SMS permission is requested merely by opening it.
+MMS, RCS, old inbox import, and live carrier acceptance are not included. See [docs/MESSAGES.md](docs/MESSAGES.md).
+
 ## Battery
 
 Idle time is where a 1000 mAh battery goes.
 
-- **The cellular modem is always off** (airplane mode with Wi-Fi left on). A SIM is optional.
+- **The cellular modem is off by default** (airplane mode with Wi-Fi left on). With **Use cellular
+  data (SIM)** enabled, it wakes with the device and returns to airplane mode at the normal idle cut.
 - **Wi-Fi switches off** after 3 minutes with the screen dark. The next button press turns it back
   on, and it reconnects while you're still talking.
-- **Nothing runs in the background:**
+- **No continuous background polling:**
   - no polling, scanning, location or Bluetooth;
   - Rabbit's apps are removed;
   - Doze starts within seconds.
+  - Optional incoming SMS use Android broadcasts while the modem is reachable. Messages does not
+    keep it awake; carrier-queued delivery after wake is not guaranteed.
 - **The screen stays on only during a turn**, then times out after 15 s at low brightness.
 - **The network is used only during a turn:** voice streams only while you hold the button, and the
   live session closes 20 s after a reply.
@@ -86,7 +96,7 @@ self-hosted speech.
 ## Repo layout
 
 ```
-app/                    the Android app (Kotlin, no AndroidX; OkHttp + coroutines)
+app/                    native Android app (Kotlin, OkHttp + coroutines; Robolectric tests)
 magisk/r1ptt-system/    Magisk module: keylayout + boot-time power settings
 tools/                  build, smoke-test, flash, provision, battery-report scripts
 server/                 backend setup notes (Hermes, Speaches)

@@ -78,6 +78,7 @@ class HomeActivity : Activity(), DictationTarget {
         }
         findViewById<View>(R.id.send).setOnClickListener { if (!sendTyped()) showKeyboard() }
         findViewById<View>(R.id.settings).setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
+        findViewById<View>(R.id.messages).setOnClickListener { startActivity(Intent(this, dev.r1ptt.messages.MessagesActivity::class.java)) }
         window.decorView.setOnApplyWindowInsetsListener { v, insets ->
             val ime = insets.isVisible(WindowInsets.Type.ime())
             if (ime != imeVisible) {
@@ -86,7 +87,6 @@ class HomeActivity : Activity(), DictationTarget {
             }
             v.onApplyWindowInsets(insets)
         }
-        app.turns.target = this
         // Volume keys (the wheel) adjust speech, not the ringer, even when nothing is playing.
         volumeControlStream = AudioManager.STREAM_MUSIC
 
@@ -99,6 +99,7 @@ class HomeActivity : Activity(), DictationTarget {
         super.onResume()
         resumed = true
         visible = true
+        app.turns.attachTarget(this)
         hideSystemBars()
         if (hasMic()) PttService.start(this) // the microphone service may only start from the foreground
         ui = MainScope().also { s ->
@@ -109,6 +110,7 @@ class HomeActivity : Activity(), DictationTarget {
     }
 
     override fun onPause() {
+        app.turns.detachTarget(this)
         resumed = false
         visible = false
         ui?.cancel()
@@ -117,7 +119,7 @@ class HomeActivity : Activity(), DictationTarget {
     }
 
     override fun onDestroy() {
-        if (app.turns.target === this) app.turns.target = null
+        app.turns.detachTarget(this)
         super.onDestroy()
     }
 

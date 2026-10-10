@@ -1,0 +1,64 @@
+package dev.r1ptt.messages
+
+import android.app.Application
+import org.junit.After
+import org.junit.Assert.*
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], application = Application::class)
+class SmsStoreTest {
+    private lateinit var store: SmsStore
+    @Before fun setup() { RuntimeEnvironment.getApplication().deleteDatabase("messages.db"); store = SmsStore(RuntimeEnvironment.getApplication()) }
+    @After fun cleanup() { store.close() }
+    private fun record() = SmsRecord.outgoing("+15551234567", "Synthetic test", 1, 2, 1000)
+
+    @Test fun committedAttemptSurvivesReopeningAndCannotBeReservedTwice() {
+        val record = record()
+        val draft = SmsDraft(record.peer, record.body)
+        store.saveDraft(draft); store.outgoing(record, draft); store.close()
+        store = SmsStore(RuntimeEnvironment.getApplication())
+        assertEquals(record, store.conversation(record.peer).single())
+        assertEquals(SmsDraft(), store.draft())
+        store.saveDraft(SmsDraft("12345", "New draft"))
+        assertThrows(IllegalStateException::class.java) { store.outgoing(record, store.draft()) }
+        assertEquals(SmsDraft("12345", "New draft"), store.draft())
+        assertEquals(1, store.conversation(record.peer).size)
+    }
+    @Test fun callbackUpdatesAreDurableAndForgedCallbacksDoNothing() {
+        val record = record(); store.outgoing(record, SmsDraft())
+        val correct = SmsCallback(record.id, record.token, 0, false)
+        assertFalse(store.update(correct.copy(token = "wrong")) { it.sent(0, true, -1) })
+        assertTrue(store.update(correct) { it.sent(0, true, -1) })
+        assertFalse(store.update(correct) { it.sent(0, false, 4) })
+        store.close(); store = SmsStore(RuntimeEnvironment.getApplication())
+        assertEquals(SentPart.SENT, store.conversation(record.peer).single().parts[0].sent)
+        assertEquals(SmsStatus.UNKNOWN, store.conversation(record.peer).single().status(900_000))
+    }
+    @Test fun anEditedDraftIsNotClearedByAnOlderReview() {
+        val record = record()
+        val current = SmsDraft(record.peer, "Edited after review")
+        store.saveDraft(current); store.outgoing(record, SmsDraft(record.peer, record.body))
+        assertEquals(current, store.draft())
+    }
+    @Test fun incomingReplaysDeduplicateAndUnreadIsLocal() {
+        val incoming = SmsRecord("pdu-hash", "12345", "Synthetic incoming", 2000, 1, true)
+        assertTrue(store.insert(incoming)); assertFalse(store.insert(incoming))
+        assertEquals(1, store.conversation("12345").size)
+        assertTrue(store.threads().single().unread)
+        store.markRead("12345")
+        assertFalse(store.threads().single().unread)
+    }
+    @Test fun recipientsAreExplicitAndDuplicateNamesRemainDistinct() {
+        assertTrue(store.recipients().isEmpty())
+        store.addRecipient("Yana", "+15551234567"); store.addRecipient("Yana", "+15557654321")
+        assertTrue(SmsRecipientResolver.resolve("Yana", store.recipients()) is SmsResolution.Choose)
+        store.removeRecipient(store.recipients().last().id)
+        assertEquals(SmsResolution.Number("+15551234567"), SmsRecipientResolver.resolve("Yana", store.recipients()))
+    }
+}
