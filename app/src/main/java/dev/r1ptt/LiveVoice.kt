@@ -12,6 +12,7 @@ import dev.r1ptt.data.Msg
 import dev.r1ptt.net.LiveProtocol
 import dev.r1ptt.net.LiveSession
 import dev.r1ptt.net.SocketPump
+import dev.r1ptt.messages.SmsAssistant
 
 /** App-owned voice exchanges. Interrupted/failed sockets are discarded; completed ones stay warm. */
 class LiveVoice(
@@ -19,6 +20,7 @@ class LiveVoice(
     private val publish: (TurnState) -> Unit,
     private val fail: (String) -> Unit,
     private val settled: () -> Unit,
+    private val sendSms: (SmsAssistant.Request) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val tracker = LiveTracker(SystemClock::elapsedRealtime)
@@ -278,10 +280,10 @@ class LiveVoice(
     }
 
     private fun finishExchange() {
-        val smsDraft = app.smsAssistant.command(heard.toString().trim())
+        val smsRequest = app.smsAssistant.request(heard.toString().trim())
         stopCapture()
         scope.end()
-        if (smsDraft == null) flushExchange()
+        if (smsRequest == null) flushExchange()
         else { heard.setLength(0); said.setLength(0); closeSession() }
         tracker.reset()
         active = false
@@ -290,10 +292,7 @@ class LiveVoice(
         publish(TurnState())
         scheduleClose()
         settled()
-        if (smsDraft != null) {
-            val opened = app.smsAssistant.open(smsDraft)
-            publish(TurnState(note = if (opened) "SMS draft opened · review it before sending" else "Couldn't open Messages. No text was sent."))
-        }
+        smsRequest?.let(sendSms)
     }
 
     private fun failExchange(message: String) {

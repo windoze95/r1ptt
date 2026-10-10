@@ -45,7 +45,7 @@ import java.net.URI
 import java.text.DateFormat
 import java.util.Date
 
-/** One-to-one SMS UI. The review dialog's Send button is the sole outgoing transport entry point. */
+/** One-to-one SMS UI. Manual drafts and external compose requests require review. */
 class MessagesActivity : Activity(), DictationTarget {
     private val app get() = application as App
     private val sms get() = app.sms
@@ -89,6 +89,9 @@ class MessagesActivity : Activity(), DictationTarget {
         if (externalPeer != null && SmsAddress.normalize(externalPeer) == externalPeer && externalBody.length <= SmsRecord.MAX_DRAFT_CHARS)
             pendingExternal = SmsDraft(externalPeer, externalBody)
         pendingNotice = intent.getStringExtra(SmsExternalDraft.NOTICE)?.take(300)
+        intent.getStringExtra(SmsAssistant.THREAD)?.let { address ->
+            if (SmsAddress.normalize(address) == address) { screen = Screen.CONVERSATION; peer = address }
+        }
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(10), dp(4), dp(10), dp(6))
@@ -392,7 +395,7 @@ class MessagesActivity : Activity(), DictationTarget {
             if (sms.canSend) "SMS sending is enabled" else "Enable SMS sending",
             if (SmsRole.held(this)) "Default SMS app · incoming enabled" else if (sms.receiveEnabled) "Turn off incoming texts" else "Enable incoming texts",
             if (dictationConsent == consentKey()) "Turn off dictation" else "Enable dictation for this visit",
-            if (app.smsAssistant.enabled) "Turn off assistant SMS drafts" else "Enable assistant SMS drafts",
+            if (app.smsAssistant.enabled) "Turn off assistant SMS sending" else "Enable assistant SMS sending",
             "Saved recipients",
             "robotOS settings",
             if (SmsRole.held(this)) "robotOS is the default SMS app" else "Make robotOS the default SMS app",
@@ -463,9 +466,9 @@ class MessagesActivity : Activity(), DictationTarget {
     }
 
     private fun enableAssistant() {
-        showDialog(AlertDialog.Builder(this).setTitle("Let the assistant prepare SMS drafts?")
-            .setMessage("Say ‘Text Yana that I’m on my way’ or ‘Text +15551234567: I’m on my way’. The completed request opens a draft for review; only the Send SMS button sends.\n\nSpoken requests go to your configured voice or transcription provider. Saved recipients and existing texts stay local. Speech-to-speech opens the draft after its voice turn finishes. Other phrasings and ‘send that to her’ are not supported yet.")
-            .setPositiveButton("Enable draft action") { _, _ -> app.smsAssistant.enabled = true; app.turns.refreshVoiceContext(); status.setText(R.string.sms_assistant_enabled) }
+        showDialog(AlertDialog.Builder(this).setTitle("Let the assistant send texts directly?")
+            .setMessage("Say ‘Text Yana that I’m on my way’ or ‘Text +15551234567: I’m on my way’. Completed commands send without review when the number or saved name is unambiguous. Carrier SMS charges may apply. Missing or ambiguous recipients need clarification.\n\nSpoken requests go to your configured voice or transcription provider. Saved recipients and existing texts stay local. Speech-to-speech sends after its voice turn finishes. Messages shows the actual send status. Other phrasings and ‘send that to her’ are not supported yet.")
+            .setPositiveButton("Enable direct sending") { _, _ -> app.smsAssistant.enabled = true; app.turns.refreshVoiceContext(); status.setText(R.string.sms_assistant_enabled) }
             .setNegativeButton("Cancel", null))
     }
 

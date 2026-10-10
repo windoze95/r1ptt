@@ -8,8 +8,9 @@ Messaging app, or add a messaging backend.
 ## Use
 
 Open the message icon on Home. **New text** opens a single-recipient draft. **Review text**, the
-keyboard action, and a side-button tap all stop at recipient/message review. Only **Send SMS**
-in that review dispatches the text. Long messages are split by Android; the review shows the part
+keyboard action, and a side-button tap in Messages all stop at recipient/message review. **Send SMS**
+in that review dispatches a manual draft. Separately enabled assistant commands can send directly.
+Long messages are split by Android; the review shows the part
 count. The limit is ten SMS parts and 1,600 draft characters. Pictures, attachments, group MMS,
 RCS, and importing old SMS are outside this version.
 
@@ -32,9 +33,11 @@ Messages → **Options** has separate opt-ins:
   Audio leaves the device only after this opt-in and a hold in the compose screen. Release
   inserts words into the draft. The draft, recipient, and prior texts are not supplied as context.
   Changing endpoints invalidates consent. Messages dictation clips are excluded from `saveClips`.
-- **Enable assistant SMS drafts** recognizes completed requests like “Text Yana that I’m on my
+- **Enable assistant SMS sending** recognizes completed requests like “Text Yana that I’m on my
   way”, “Please text Yana saying I’m on my way”, and “Text +15551234567: I’m on my way”. This
-  prepares a draft; it cannot send. Your spoken request goes to the configured voice or STT
+  sends directly without a review step when the recipient is an exact number or a unique saved
+  name. Android SMS access, a default SMS SIM, and the cellular setting are still required. The
+  old draft-only opt-in does not enable direct sending; enable this new option once. Your spoken request goes to the configured voice or STT
   provider, as disclosed when enabling the action. Contextual requests such as “send that to her”
   are not supported.
 - **Saved recipients** stores names and exact numbers you enter on this device. The assistant
@@ -44,9 +47,14 @@ Messages → **Options** has separate opt-ins:
 
 In the transcription/chat path, matching commands are intercepted before the chat request. The
 current GPT-Live speech-to-speech protocol has no client device-tool bridge, so a matching command
-opens its draft only after the voice turn completes. Interrupted or failed turns do not execute a
-draft action. Completed recognized commands are not copied into AI chat history. Provider speech
-is not evidence of SMS dispatch: the local review and status are authoritative.
+dispatches only after the voice turn completes. Interrupted or failed turns do not send. A command
+is consumed once; a new press or turn invalidates a pending recipient lookup. Missing or ambiguous
+recipients open a clarification draft instead of sending. Complete that draft manually or issue a
+new command with the exact number. Assistant sends preserve any existing manual draft.
+Completed recognized commands are not copied into AI chat history. Provider speech is not evidence
+of SMS dispatch: Messages opens the stored attempt and displays Android's actual send and delivery
+status. Model replies, incoming texts, compose intents, and restored activities cannot trigger an
+assistant send.
 
 ## Delivery, privacy, and sleep
 
@@ -76,7 +84,7 @@ have separate states. There are no automatic retries, including after process de
 “Use as a new draft” warns that an uncertain previous text may have arrived and still requires review.
 The in-app updater waits for an active SMS handoff to settle or reach its bounded uncertainty window.
 
-SMS does not wait for internet connectivity. A confirmed send asks the existing radio policy to
+SMS does not wait for internet connectivity. An explicit send asks the existing radio policy to
 wake radios it put to sleep; it does not modify that policy, APNs, roaming, or background limits.
 There is no receiving foreground service, polling job, SMS wake lock, or continuous modem lease.
 The existing idle cut can therefore delay or prevent reception. Carriers may retry queued SMS
@@ -102,7 +110,8 @@ with a visible explanation rather than silently converted into SMS.
 ## Validation and live acceptance boundary
 
 JVM and Robolectric tests use synthetic data and a fake transport: address validation, explicit
-command parsing, local/ambiguous recipient resolution, draft ownership, durable SQLite transactions,
+command parsing, direct assistant dispatch, local/ambiguous recipient resolution, stale and repeated
+completion rejection, draft ownership, durable SQLite transactions,
 process restart, replay protection, part aggregation, uncertain failures, permission/SIM changes,
 manifest protection, role entry points, version-one data migration, exact system-provider copies,
 MMS-notice persistence, call-reply drafts, result diagnostics, and compose/button behavior. The existing voice, configuration, updater,
@@ -120,7 +129,8 @@ permission workarounds. Then verify:
    “Sent”; missing carrier receipts remain unconfirmed.
 4. Test optional incoming reception while awake and after the normal radio idle cut. Verify the
    modem still sleeps; document actual retry delay and any missed/expired text instead of promising it.
-5. Check assistant missing/duplicate-name drafts, explicit final confirmation, cloud-dictation
+5. Check direct assistant sending only with a separately approved real recipient and body. Use fake
+   transport tests for missing/duplicate-name clarification and stale/repeated completion. Check cloud-dictation
    consent, Home PTT/audio, app update fences, and draft recovery after app restart.
 
 No live SMS send, incoming-message inspection, default-role change, or SMS permission grant is

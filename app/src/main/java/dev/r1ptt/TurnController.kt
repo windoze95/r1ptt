@@ -19,6 +19,7 @@ import dev.r1ptt.net.Http
 import dev.r1ptt.net.SttClient
 import dev.r1ptt.net.TtsClient
 import dev.r1ptt.net.friendly
+import dev.r1ptt.messages.SmsAssistant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -126,7 +127,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     /** Speech-to-speech for voice turns with the keyboard closed (OpenAI provider). */
-    private val live = LiveVoice(app, publish = { _state.value = it }, fail = ::fail, settled = ::settle)
+    private val live = LiveVoice(app, publish = { _state.value = it }, fail = ::fail, settled = ::settle, sendSms = ::sendSms)
 
     val busy: Boolean get() = _state.value.phase.active || recorder != null || stream != null || live.busy
 
@@ -150,6 +151,7 @@ class TurnController(private val app: App) : Gestures.Listener {
         var speaker: Speaker? = null
         val reply = StringBuffer()
         var replySaved = false
+        var sms: SmsAssistant.Request? = null
     }
 
     init {
@@ -361,8 +363,10 @@ class TurnController(private val app: App) : Gestures.Listener {
         if (emitStart) TurnMetrics.event("turn_start", id, "mode" to 2L, "warm" to 0L, "ready" to 0L, "connection" to 0L)
         current = turn
         turn.job = scope.launch {
+            var completed = false
             try {
                 block(turn)
+                completed = true
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -378,6 +382,7 @@ class TurnController(private val app: App) : Gestures.Listener {
                     current = null
                     TurnMetrics.event("exchange_complete", turn.id)
                     settle()
+                    if (completed) turn.sms?.let(::sendSms)
                 }
             }
         }
@@ -447,8 +452,9 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     private suspend fun ask(turn: Turn, text: String) {
-        app.smsAssistant.command(text)?.let { command ->
-            note(if (app.smsAssistant.open(command)) "SMS draft opened · review it before sending" else "Couldn't open Messages. No text was sent.")
+        app.smsAssistant.request(text)?.let { request ->
+            turn.sms = request
+            note("Preparing text…")
             return
         }
         val cfg = app.store.value
@@ -534,6 +540,11 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     // ---- state helpers ----
+
+    private fun sendSms(request: SmsAssistant.Request) {
+        val generation = pressGeneration
+        app.smsAssistant.execute(request, current = { generation == pressGeneration && !busy }, report = ::note)
+    }
 
     private fun idle() {
         _state.value = TurnState()

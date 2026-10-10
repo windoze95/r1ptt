@@ -79,13 +79,13 @@ class SmsStore(context: Context) : SQLiteOpenHelper(context, "messages.db", null
     fun addReplyRequest(id: String, draft: SmsDraft) { writableDatabase.insertOrThrow("reply_requests", null, ContentValues().apply { put("id", id); put("peer", draft.peer); put("body", draft.body) }) }
     fun removeReplyRequest(id: String) { writableDatabase.delete("reply_requests", "id=?", arrayOf(id)) }
 
-    fun outgoing(record: SmsRecord, draft: SmsDraft) {
+    fun outgoing(record: SmsRecord, draft: SmsDraft?) {
         val db = writableDatabase
         db.beginTransaction()
         try {
             check(insert(record)) { "This send was already recorded" }
             // The draft may have changed while the review was open; clear only that exact draft.
-            db.delete("draft", "id=1 AND peer=? AND body=?", arrayOf(draft.peer, draft.body))
+            if (draft != null) db.delete("draft", "id=1 AND peer=? AND body=?", arrayOf(draft.peer, draft.body))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }

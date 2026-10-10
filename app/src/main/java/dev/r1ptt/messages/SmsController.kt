@@ -117,7 +117,7 @@ class SmsController(
         runCatching { systemStore.sync(record) }.onFailure { notifyPrivate("A text is saved in robotOS, but its system SMS copy could not be updated.") }
     }
 
-    /** Preparation is local. The only transport call is in send(), after the review button. */
+    /** Preparation is local. The only transport call is in send(). */
     fun prepare(draft: SmsDraft): SmsReview {
         check(canSend) { "Enable SMS sending first." }
         check(cellularEnabled()) { "Turn on Use cellular data (SIM) in robotOS settings first." }
@@ -135,13 +135,13 @@ class SmsController(
         return SmsReview(draft, SmsRecord.outgoing(peer, body, sub, texts.size, System.currentTimeMillis()), texts, label)
     }
 
-    /** Consumes one reviewed attempt. Persist first; a crash can never cause an automatic resend. */
-    fun send(review: SmsReview, done: (Boolean, String) -> Unit) {
+    /** Consumes one explicit attempt (review button or assistant command). Never automatically retries. */
+    fun send(review: SmsReview, clearDraft: Boolean = true, done: (Boolean, String) -> Unit) {
         if (dispatching || app.updates.installing || app.turns.busy) {
             done(false, "Finish the current action before sending."); return
         }
         if (!canSend || !cellularEnabled() || SubscriptionManager.getDefaultSmsSubscriptionId() != review.record.subscriptionId) {
-            done(false, "SMS access or the selected SIM changed. Review the text again."); return
+            done(false, "SMS access or the selected SIM changed. Nothing was sent. Try the command or review again."); return
         }
         dispatching = true
         // Restore only radios robotOS put to sleep. Android's SMS service owns the actual send;
@@ -154,7 +154,7 @@ class SmsController(
                 check(SubscriptionManager.getDefaultSmsSubscriptionId() == review.record.subscriptionId)
                 val record = review.record.copy(createdAt = System.currentTimeMillis(), systemOwned = SmsRole.held(app),
                     sendEvidence = SmsDiagnostics.current(app, cellularEnabled()))
-                db.outgoing(record, review.draft)
+                db.outgoing(record, review.draft.takeIf { clearDraft })
                 persisted = true
                 syncSystem(record)
                 pending.entries.removeAll { it.value <= SystemClock.elapsedRealtime() }
