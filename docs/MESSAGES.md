@@ -33,21 +33,34 @@ Messages → **Options** has separate opt-ins:
   Audio leaves the device only after this opt-in and a hold in the compose screen. Release
   inserts words into the draft. The draft, recipient, and prior texts are not supplied as context.
   Changing endpoints invalidates consent. Messages dictation clips are excluded from `saveClips`.
-- **Enable assistant SMS sending** recognizes completed requests like “Text Yana that I’m on my
-  way”, “Please text Yana saying I’m on my way”, and “Text +15551234567: I’m on my way”. This
+- **Enable assistant SMS sending** recognizes completed requests like “Send Yana a text saying
+  I’m on my way”, “Could you please message Yana: I’m on my way”, and “Text +15551234567: I’m on my way”. This
   sends directly without a review step when the recipient is an exact number or a unique saved
   name. Android SMS access, a default SMS SIM, and the cellular setting are still required. The
-  old draft-only opt-in does not enable direct sending; enable this new option once. Your spoken request goes to the configured voice or STT
-  provider, as disclosed when enabling the action. Contextual requests such as “send that to her”
-  are not supported.
+  old draft-only opt-in does not enable direct sending; enable this option once. Voice uses the
+  configured transcription endpoint, followed by the selected chat provider. This adds an action
+  interpretation step before the reply. Contextual requests such as “send that to her”, scheduled
+  sends, multiple recipients, and composing a message from a topic require clarification.
+- **Recent assistant outcomes** shows at most 50 local outcomes from the last three days. Each
+  contains a random action ID, timestamp, input source, result/category, and optional numeric
+  error code. No recipient, body, transcript, URL, API key, or raw provider error is retained here.
+  Older builds did not record these outcomes, so earlier attempts cannot be reconstructed.
 - **Saved recipients** stores names and exact numbers you enter on this device. The assistant
   receives no contact list. Exact names match without case sensitivity; different numbers under
   the same name require a local choice. Missing names leave the phone field empty. No phone
   number is inferred from an AI response or invented.
 
-In the transcription/chat path, matching commands are intercepted before the chat request. The
-current GPT-Live speech-to-speech protocol has no client device-tool bridge, so a matching command
-dispatches only after the voice turn completes. Interrupted or failed turns do not send. A command
+Literal commands are intercepted locally before ordinary chat. Other completed requests use a
+bounded, stateless intent request at the selected chat endpoint, with only the current user input.
+The full response must finish normally and identify one recipient and the exact body from that input.
+Invalid or incomplete responses report no text sent. No action is executed from partial streamed
+output. The parser receives no contact list, SMS database, or conversation history; Hermes uses a
+fresh parser session. Saved recipient names resolve locally after extraction.
+
+The current GPT-Live speech-to-speech protocol has no client device-tool bridge. While assistant
+SMS sending is enabled, Home voice turns use completed transcription → intent → native action
+or ordinary chat/TTS. This applies to OpenAI, Hermes, and custom chat providers. GPT-Live remains
+available when assistant sending is off. Interrupted or failed turns do not send. A command
 is consumed once; a new press or turn invalidates a pending recipient lookup. Missing or ambiguous
 recipients open a clarification draft instead of sending. Complete that draft manually or issue a
 new command with the exact number. Assistant sends preserve any existing manual draft.
@@ -55,6 +68,12 @@ Completed recognized commands are not copied into AI chat history. Provider spee
 of SMS dispatch: Messages opens the stored attempt and displays Android's actual send and delivery
 status. Model replies, incoming texts, compose intents, and restored activities cannot trigger an
 assistant send.
+
+The outcome journal distinguishes request resolution, clarification, cancellation, API/network
+failure, Android handoff, and native sent/delivery results. A completed AI turn never means a text
+was sent. A handoff with no result after two minutes displays unknown and must not be retried
+automatically. Native status callbacks remain authoritative; success requires sent callbacks for
+every SMS part, and delivery requires a carrier report.
 
 ## Delivery, privacy, and sleep
 
@@ -110,7 +129,9 @@ with a visible explanation rather than silently converted into SMS.
 ## Validation and live acceptance boundary
 
 JVM and Robolectric tests use synthetic data and a fake transport: address validation, explicit
-command parsing, direct assistant dispatch, local/ambiguous recipient resolution, stale and repeated
+command parsing, natural intent extraction with mocked streaming providers, typed/completed-voice
+dispatch, cancellation and malformed/incomplete responses, bounded content-free outcomes,
+local/ambiguous recipient resolution, stale and repeated
 completion rejection, draft ownership, durable SQLite transactions,
 process restart, replay protection, part aggregation, uncertain failures, permission/SIM changes,
 manifest protection, role entry points, version-one data migration, exact system-provider copies,

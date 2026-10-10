@@ -12,7 +12,6 @@ import dev.r1ptt.data.Msg
 import dev.r1ptt.net.LiveProtocol
 import dev.r1ptt.net.LiveSession
 import dev.r1ptt.net.SocketPump
-import dev.r1ptt.messages.SmsAssistant
 
 /** App-owned voice exchanges. Interrupted/failed sockets are discarded; completed ones stay warm. */
 class LiveVoice(
@@ -20,7 +19,6 @@ class LiveVoice(
     private val publish: (TurnState) -> Unit,
     private val fail: (String) -> Unit,
     private val settled: () -> Unit,
-    private val sendSms: (SmsAssistant.Request) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val tracker = LiveTracker(SystemClock::elapsedRealtime)
@@ -44,6 +42,7 @@ class LiveVoice(
     @Volatile private var level = 0f
     private var waitingForNet = false
     private var firstReply = false
+    private var outcomeId: String? = null
     private val ticker = object : Runnable {
         override fun run() { tick(); if (active) main.postDelayed(this, 200) }
     }
@@ -64,6 +63,7 @@ class LiveVoice(
     fun startCapture(): Boolean {
         main.removeCallbacks(closer)
         stopCapture()
+        outcomeId = app.outcomes.begin(OutcomeSource.LIVE_VOICE)
         turnId = TurnMetrics.next()
         val warm = session?.takeIf { !it.gone }
         TurnMetrics.event("turn_start", turnId, "mode" to 0L, "warm" to if (warm != null) 1L else 0L,
@@ -74,7 +74,7 @@ class LiveVoice(
             { captureFailed(generation, "Microphone unavailable; input may be partial") },
         ) { if (synchronized(micLock) { capture.accepts(generation) }) level = it }
         mic = if (m.start()) m else null
-        if (mic == null) { stopCapture(); TurnMetrics.event("session_failed", turnId); settled() }
+        if (mic == null) { stopCapture(); outcomeId?.let { app.outcomes.update(it, OutcomeStatus.FAILED, OutcomeReason.UNAVAILABLE) }; TurnMetrics.event("session_failed", turnId); settled() }
         return mic != null
     }
 
@@ -280,11 +280,9 @@ class LiveVoice(
     }
 
     private fun finishExchange() {
-        val smsRequest = app.smsAssistant.request(heard.toString().trim())
         stopCapture()
         scope.end()
-        if (smsRequest == null) flushExchange()
-        else { heard.setLength(0); said.setLength(0); closeSession() }
+        flushExchange()
         tracker.reset()
         active = false
         main.removeCallbacks(ticker)
@@ -292,10 +290,11 @@ class LiveVoice(
         publish(TurnState())
         scheduleClose()
         settled()
-        smsRequest?.let(sendSms)
+        outcomeId?.let { app.outcomes.finishIfOpen(it, OutcomeStatus.COMPLETED) }
     }
 
     private fun failExchange(message: String) {
+        outcomeId?.let { app.outcomes.update(it, OutcomeStatus.FAILED, OutcomeStore.reason(message)) }
         TurnMetrics.event("session_failed", turnId)
         stopExchange(save = false, close = true)
         fail(message)
@@ -303,6 +302,7 @@ class LiveVoice(
     }
 
     private fun stopExchange(save: Boolean, close: Boolean) {
+        outcomeId?.let { app.outcomes.finishIfOpen(it, OutcomeStatus.CANCELLED) }
         scope.end() // invalidate posted transcript/backend callbacks before changing state
         stopCapture()
         if (close) closeSession()
@@ -319,10 +319,8 @@ class LiveVoice(
     private fun clearHeld() { held.clear(); heldBytes = 0 }
     private fun flushExchange() {
         val q = heard.toString().trim(); val a = said.toString().trim()
-        if (app.smsAssistant.command(q) == null) {
-            if (q.isNotEmpty()) app.history.add(Msg.USER, q)
-            if (a.isNotEmpty()) app.history.add(Msg.ASSISTANT, a)
-        }
+        if (q.isNotEmpty()) app.history.add(Msg.USER, q)
+        if (a.isNotEmpty()) app.history.add(Msg.ASSISTANT, a)
         heard.setLength(0); said.setLength(0)
     }
     private fun scheduleClose() {

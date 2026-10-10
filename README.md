@@ -51,13 +51,16 @@ The R1 is an Android 13 phone underneath (MediaTek MT6765). The firmware is four
 Tap the text field on the touchscreen to bring up the keyboard. The gear icon opens settings.
 
 The message icon opens **Messages**, a one-to-one SMS handler. Type a draft, or opt in
-to dictation and assistant commands such as “Text Yana that I’m on my way.” Saved names resolve
+to dictation and assistant requests such as “Send Yana a text saying I’m on my way.” Saved names resolve
 locally; unknown or ambiguous recipients need your input. With **assistant SMS sending** enabled,
 explicit completed commands send directly without review. Manual drafts still use **Review text**
 and **Send SMS**. Sending, new incoming texts, and assistant commands each have
 explicit controls in Messages → Options. No SMS permission is requested merely by opening it. Options can request Android’s default SMS
 role. MMS is explicitly unsupported; incoming MMS notices are retained locally and shown as warnings.
 Message details exposes native failure codes without retrying a failed or uncertain attempt.
+With assistant sending enabled, voice uses completed transcription and the selected chat provider
+to resolve requests before replying. Options → **Recent assistant outcomes** retains brief result
+categories, including failures; it contains no message text or recipient numbers.
 MMS, RCS, old inbox import, and live carrier acceptance are not included. See [docs/MESSAGES.md](docs/MESSAGES.md).
 
 ## Battery

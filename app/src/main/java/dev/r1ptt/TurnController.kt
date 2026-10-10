@@ -20,6 +20,8 @@ import dev.r1ptt.net.SttClient
 import dev.r1ptt.net.TtsClient
 import dev.r1ptt.net.friendly
 import dev.r1ptt.messages.SmsAssistant
+import dev.r1ptt.messages.SmsIntent
+import dev.r1ptt.messages.SmsIntentClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -91,7 +93,11 @@ interface DictationTarget {
  * A new press always interrupts whatever is going on. Gesture callbacks arrive on the main thread;
  * network work runs on a small pool and is cancelled with its turn.
  */
-class TurnController(private val app: App) : Gestures.Listener {
+class TurnController(
+    private val app: App,
+    private val assistant: SmsAssistant = app.smsAssistant,
+    private val resolveIntent: (Config, String, CallRegistry) -> SmsIntent = SmsIntentClient()::resolve,
+) : Gestures.Listener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val pool = Executors.newCachedThreadPool()
     private val stt = SttClient()
@@ -127,7 +133,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     /** Speech-to-speech for voice turns with the keyboard closed (OpenAI provider). */
-    private val live = LiveVoice(app, publish = { _state.value = it }, fail = ::fail, settled = ::settle, sendSms = ::sendSms)
+    private val live = LiveVoice(app, publish = { _state.value = it }, fail = ::fail, settled = ::settle)
 
     val busy: Boolean get() = _state.value.phase.active || recorder != null || stream != null || live.busy
 
@@ -146,7 +152,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     private var destination = CapturedInput<DictationTarget>(null)
     private var transcriptionConfig = app.store.value
 
-    private class Turn(val id: Long, val conversation: String, val input: CapturedInput<DictationTarget>, val sttConfig: Config) {
+    private class Turn(val id: Long, val conversation: String, val input: CapturedInput<DictationTarget>, val sttConfig: Config, val outcome: String) {
         var job: Job? = null
         var speaker: Speaker? = null
         val reply = StringBuffer()
@@ -181,7 +187,7 @@ class TurnController(private val app: App) : Gestures.Listener {
         if (dictationBlockedPress) return
         transcriptionConfig = cfg // a mid-press settings change cannot redirect private audio
         // Keyboard closed → speech-to-speech (if available); keyboard open → dictation via transcription.
-        liveTurn = !dictating && cfg.liveVoice
+        liveTurn = !dictating && useLiveVoice(cfg, assistant.enabled)
         // Dictation (and agent voice turns) stream through live transcription when it's on OpenAI.
         streamTurn = !liveTurn && cfg.liveStt
         app.radio.onActivity()
@@ -256,7 +262,7 @@ class TurnController(private val app: App) : Gestures.Listener {
                 destination.target?.takeIf { it === target }?.clearPartial()
                 note("Didn't hear anything")
             } else {
-                launch(id = s.turnId, emitStart = false) { turn -> transcribeStream(turn, s) }
+                launch(id = s.turnId, emitStart = false, outcomeId = s.outcomeId) { turn -> transcribeStream(turn, s) }
             }
             settle()
             return
@@ -317,7 +323,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     /** Screen on: with the keyboard closed, the next thing is probably a voice turn. */
     fun screenOn() {
         if (app.updates.installing) return
-        if (!privateInputScreen && target?.isActive() != true) live.warm()
+        if (!assistant.enabled && !privateInputScreen && target?.isActive() != true) live.warm()
     }
 
     fun screenOff() = live.screenOff()
@@ -346,7 +352,7 @@ class TurnController(private val app: App) : Gestures.Listener {
         dictationBlockedPress = false
         app.radio.onActivity()
         app.screen.holdAwake()
-        launch { turn -> ask(turn, text) }
+        launch(source = OutcomeSource.TYPED) { turn -> ask(turn, text) }
     }
 
     // ---- the turn ----
@@ -358,8 +364,8 @@ class TurnController(private val app: App) : Gestures.Listener {
         return true
     }
 
-    private fun launch(id: Long = TurnMetrics.next(), emitStart: Boolean = true, block: suspend (Turn) -> Unit) {
-        val turn = Turn(id, app.history.convId, destination, transcriptionConfig)
+    private fun launch(id: Long = TurnMetrics.next(), emitStart: Boolean = true, source: OutcomeSource = OutcomeSource.VOICE, outcomeId: String? = null, block: suspend (Turn) -> Unit) {
+        val turn = Turn(id, app.history.convId, destination, transcriptionConfig, outcomeId ?: app.outcomes.begin(source))
         if (emitStart) TurnMetrics.event("turn_start", id, "mode" to 2L, "warm" to 0L, "ready" to 0L, "connection" to 0L)
         current = turn
         turn.job = scope.launch {
@@ -368,8 +374,10 @@ class TurnController(private val app: App) : Gestures.Listener {
                 block(turn)
                 completed = true
             } catch (e: CancellationException) {
+                app.outcomes.finishIfOpen(turn.outcome, OutcomeStatus.CANCELLED)
                 throw e
             } catch (e: Throwable) {
+                app.outcomes.update(turn.outcome, OutcomeStatus.FAILED, OutcomeStore.reason(e), (e as? dev.r1ptt.net.ApiError)?.code)
                 if (turn.input.target?.privateDictation() == true) Log.w(TAG, "Private dictation failed")
                 else Log.w(TAG, "turn failed", e)
                 TurnMetrics.event("session_failed", turn.id)
@@ -382,7 +390,9 @@ class TurnController(private val app: App) : Gestures.Listener {
                     current = null
                     TurnMetrics.event("exchange_complete", turn.id)
                     settle()
-                    if (completed) turn.sms?.let(::sendSms)
+                    if (completed) {
+                        if (turn.sms != null) sendSms(turn.sms!!) else app.outcomes.finishIfOpen(turn.outcome, OutcomeStatus.COMPLETED)
+                    }
                 }
             }
         }
@@ -452,16 +462,40 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     private suspend fun ask(turn: Turn, text: String) {
-        app.smsAssistant.request(text)?.let { request ->
-            turn.sms = request
-            note("Preparing text…")
+        val cfg = app.store.value
+        if (assistant.enabled) {
+            val decision = assistant.command(text)?.let { SmsIntent.Send(it) } ?: try {
+                _state.value = TurnState(phase = Phase.THINKING, note = "Checking the requested action…")
+                awaitNetwork()
+                io { calls -> resolveIntent(cfg, text, calls) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                app.outcomes.update(turn.outcome, OutcomeStatus.FAILED, OutcomeStore.reason(e), (e as? dev.r1ptt.net.ApiError)?.code)
+                note("Couldn't interpret the request. No text was sent. Try ‘Text NUMBER: MESSAGE’.")
+                return
+            }
+            when (decision) {
+                is SmsIntent.Send -> {
+                    turn.sms = assistant.request(decision.action, turn.outcome)
+                    note("Preparing text…")
+                    return
+                }
+                SmsIntent.Clarify -> {
+                    app.outcomes.update(turn.outcome, OutcomeStatus.CLARIFY, OutcomeReason.RECIPIENT)
+                    note("Include one recipient and the exact message. No text was sent.")
+                    return
+                }
+                SmsIntent.Chat -> {}
+            }
+        } else if (SmsIntent.directed(text) && SmsIntent.mentionsMessaging(text)) {
+            app.outcomes.update(turn.outcome, OutcomeStatus.DISABLED)
+            note("Assistant SMS sending is off. Enable it in Messages → Options. No text was sent.")
             return
         }
-        val cfg = app.store.value
         app.history.add(Msg.USER, text)
         _state.value = TurnState(phase = Phase.THINKING)
         awaitNetwork()
-        val req = ChatRequest.build(cfg.copy(systemPrompt = cfg.systemPrompt + app.smsAssistant.instructions()), app.history.messages, app.history.convId)
+        val req = ChatRequest.build(cfg.copy(systemPrompt = cfg.systemPrompt + assistant.instructions()), app.history.messages, app.history.convId)
         val speaker = if (cfg.tts.enabled) {
             Speaker(tts::call, cfg.tts.sampleRate).also { turn.speaker = it; it.start() }
         } else null
@@ -543,7 +577,7 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     private fun sendSms(request: SmsAssistant.Request) {
         val generation = pressGeneration
-        app.smsAssistant.execute(request, current = { generation == pressGeneration && !busy }, report = ::note)
+        assistant.execute(request, current = { generation == pressGeneration && !busy }, report = ::note)
     }
 
     private fun idle() {
@@ -586,11 +620,13 @@ class TurnController(private val app: App) : Gestures.Listener {
         clip.file.delete()
     }
 
-    private companion object {
-        const val TAG = "r1ptt"
-        const val MIN_CLIP_MS = 400L
+    companion object {
+        /** Live speech has no native action bridge. Enabled texting uses completed STT → intent → executor. */
+        internal fun useLiveVoice(cfg: Config, assistantSms: Boolean) = cfg.liveVoice && !assistantSms
+        private const val TAG = "r1ptt"
+        private const val MIN_CLIP_MS = 400L
         /** Peak 100 ms RMS below this is silence (the button was held but nobody spoke). */
-        const val SILENCE = 0.002f
-        const val NET_WAIT_MS = 30_000L
+        private const val SILENCE = 0.002f
+        private const val NET_WAIT_MS = 30_000L
     }
 }

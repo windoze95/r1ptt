@@ -61,6 +61,15 @@ class SmsModelsTest {
         assertEquals(SmsStatus.PARTLY_SENT, SmsRecord.decode(record.encode()).status(900_000))
     }
 
+    @Test fun assistantOutcomeLinkIsOptionalForExistingRecordsAndSurvivesCallbacks() {
+        val old = message()
+        val json = org.json.JSONObject(old.encode()).apply { remove("assistantOutcomeId") }
+        assertEquals(old, SmsRecord.decode(json.toString()))
+        val linked = old.copy(assistantOutcomeId = "synthetic-outcome-id").sent(0, true, -1)
+        assertEquals(linked, SmsRecord.decode(linked.encode()))
+        assertEquals("synthetic-outcome-id", linked.assistantOutcomeId)
+    }
+
     @Test fun staleForgedAndMalformedCallbacksAreRejected() {
         val record = message()
         val valid = SmsCallback(record.id, record.token, 1, true)

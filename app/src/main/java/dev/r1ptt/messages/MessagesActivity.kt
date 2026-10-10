@@ -400,6 +400,7 @@ class MessagesActivity : Activity(), DictationTarget {
             "robotOS settings",
             if (SmsRole.held(this)) "robotOS is the default SMS app" else "Make robotOS the default SMS app",
             "SMS diagnostics",
+            "Recent assistant outcomes",
         )
         showDialog(AlertDialog.Builder(this).setTitle("Messages options").setItems(options) { _, which ->
             when (which) {
@@ -411,6 +412,7 @@ class MessagesActivity : Activity(), DictationTarget {
                 5 -> startActivity(Intent(this, SettingsActivity::class.java))
                 6 -> defaultSmsInfo()
                 7 -> details(null)
+                8 -> startActivity(Intent(this, dev.r1ptt.OutcomesActivity::class.java))
             }
         })
     }
@@ -467,7 +469,7 @@ class MessagesActivity : Activity(), DictationTarget {
 
     private fun enableAssistant() {
         showDialog(AlertDialog.Builder(this).setTitle("Let the assistant send texts directly?")
-            .setMessage("Say ‘Text Yana that I’m on my way’ or ‘Text +15551234567: I’m on my way’. Completed commands send without review when the number or saved name is unambiguous. Carrier SMS charges may apply. Missing or ambiguous recipients need clarification.\n\nSpoken requests go to your configured voice or transcription provider. Saved recipients and existing texts stay local. Speech-to-speech sends after its voice turn finishes. Messages shows the actual send status. Other phrasings and ‘send that to her’ are not supported yet.")
+            .setMessage("Ask naturally, for example ‘Send Yana a text saying I’m on my way’. Completed requests send without review when one recipient and the exact message are clear. Carrier SMS charges may apply. Missing or ambiguous recipients need clarification.\n\nWhile enabled, voice uses transcription and your selected chat provider to resolve actions before replying. This can add a short interpretation step. Saved recipients and existing texts stay local. Messages shows Android’s actual status; Recent assistant outcomes retains categories only. Contextual requests such as ‘send that to her’ need an explicit recipient and message.")
             .setPositiveButton("Enable direct sending") { _, _ -> app.smsAssistant.enabled = true; app.turns.refreshVoiceContext(); status.setText(R.string.sms_assistant_enabled) }
             .setNegativeButton("Cancel", null))
     }
