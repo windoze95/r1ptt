@@ -56,18 +56,12 @@ class SmsAssistant(private val app: App, private val sms: SmsController = app.sm
                 }
                 else -> {
                     app.outcomes.update(request.outcomeId, OutcomeStatus.CLARIFY, OutcomeReason.RECIPIENT)
-                    report(if (open(action)) "Recipient needs clarification in Messages. No text was sent."
-                        else "Couldn't open Messages for recipient clarification. No text was sent.")
+                    // Keep Home in front so the explanation and the next voice request remain usable.
+                    report("Use a full phone number or save an exact recipient name in Messages, then repeat the request. No text was sent.")
                 }
             }
         }
     }
-
-    private fun open(action: SmsComposeAction): Boolean = runCatching {
-        app.startActivity(Intent(app, MessagesActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            .putExtra(RECIPIENT, action.recipient).putExtra(BODY, action.body))
-    }.isSuccess
 
     fun instructions(): String = (if (enabled)
         " robotOS can send an explicit SMS request directly when one recipient and the exact message are provided. Assistant SMS sending is enabled. "

@@ -1,5 +1,6 @@
 package dev.r1ptt.messages
 
+import android.Manifest
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -8,7 +9,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.TextView
 import dev.r1ptt.App
+import dev.r1ptt.HomeActivity
 import dev.r1ptt.data.Msg
 import org.junit.Assert.*
 import org.junit.Before
@@ -71,16 +74,19 @@ class MessagesActivityTest {
         c.pause().stop().destroy()
     }
 
-    @Test fun typedAssistantActionWithUnknownNameOpensClarificationWithoutAddingAiHistory() {
+    @Test fun unknownAssistantRecipientKeepsTheExplanationVisibleOnHomeAfterTheNoticeClears() {
+        shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
         app.smsAssistant.enabled = true
+        val home = Robolectric.buildActivity(HomeActivity::class.java).setup()
         app.turns.sendText("Text Yana that I’m on my way")
-        await { shadowOf(app).peekNextStartedActivity() != null }
-        val opened = shadowOf(app).nextStartedActivity
-        assertEquals(MessagesActivity::class.java.name, opened.component?.className)
-        assertEquals("Yana", opened.getStringExtra(SmsAssistant.RECIPIENT))
-        assertEquals("I’m on my way", opened.getStringExtra(SmsAssistant.BODY))
-        assertTrue(app.history.messages.isEmpty())
+        await { app.history.messages.any { it.text.contains("full phone number") } }
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(4))
+        assertNull(shadowOf(app).nextStartedActivity)
+        assertTrue(views(home.get().window.decorView).filterIsInstance<TextView>().any { it.text.contains("full phone number") })
+        assertFalse(app.history.messages.toString().contains("Yana"))
+        assertFalse(app.history.messages.toString().contains("I’m on my way"))
         SmsStore(app).use { assertTrue(it.threads().isEmpty()) }
+        home.pause().stop().destroy()
     }
 
     @Test fun completedTypedCommandReachesSmsPreparationAfterTurnSettles() {
@@ -91,7 +97,7 @@ class MessagesActivityTest {
         assertTrue(app.turns.state.value.note.contains("Enable SMS sending"))
         assertFalse(app.turns.busy)
         assertNull(shadowOf(app).nextStartedActivity)
-        assertTrue(app.history.messages.isEmpty())
+        assertEquals(listOf("Enable SMS sending first. No text was sent."), app.history.messages.map { it.text })
         SmsStore(app).use { assertTrue(it.threads().isEmpty()) }
     }
 
