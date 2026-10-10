@@ -8,7 +8,10 @@ import dev.r1ptt.audio.SentenceSplitter
 import dev.r1ptt.audio.Speaker
 import dev.r1ptt.audio.SpeechText
 import dev.r1ptt.data.Msg
+import dev.r1ptt.data.Config
 import dev.r1ptt.input.Gestures
+import dev.r1ptt.input.CapturedInput
+import dev.r1ptt.input.InputRoute
 import dev.r1ptt.net.CallRegistry
 import dev.r1ptt.net.ChatClient
 import dev.r1ptt.net.ChatRequest
@@ -51,9 +54,15 @@ data class TurnState(
     val note: String = "",
 )
 
-/** The launcher's text field while the keyboard is up: where dictation goes. */
+/** Foreground chat or private-draft context: where dictation and button gestures go. */
 interface DictationTarget {
     fun isActive(): Boolean
+    /** A draft screen can own the button while dictation is unavailable or awaiting consent. */
+    fun canDictate(): Boolean = true
+    /** Private drafts never opt in to the debug clip archive. */
+    fun privateDictation(): Boolean = false
+    fun dictationUnavailable() {}
+    fun consumeDoubleTap(): Boolean = false
 
     /** Provisional words from live transcription, shown in place at the cursor until [insert]. */
     fun showPartial(text: String)
@@ -67,7 +76,7 @@ interface DictationTarget {
     /** Keeps the provisional words as typed text (the dictation was interrupted or failed). */
     fun keepPartial()
 
-    /** A tap while typing sends the field's text; false if it was empty. */
+    /** Handles a tap: chat sends; Messages opens review. False if there is nothing to do. */
     fun sendTyped(): Boolean
     fun hideKeyboard()
 }
@@ -92,6 +101,29 @@ class TurnController(private val app: App) : Gestures.Listener {
     val state: StateFlow<TurnState> = _state
 
     @Volatile var target: DictationTarget? = null
+        private set
+    // Keep the private-screen boundary during sleep/pause, when no Activity is resumed yet.
+    // Attaching Home explicitly restores ordinary voice behavior.
+    private var privateInputScreen = false
+
+    fun attachTarget(value: DictationTarget) {
+        target?.takeIf { it !== value }?.let(::detachTarget)
+        target = value
+        privateInputScreen = value.privateDictation()
+    }
+
+    fun detachTarget(value: DictationTarget) {
+        if (target !== value) return
+        cancelDictation(value)
+        target = null
+    }
+
+    fun cancelDictation(value: DictationTarget) {
+        if (destination.target !== value) return
+        pressGeneration++
+        stopActive()
+        settle()
+    }
 
     /** Speech-to-speech for voice turns with the keyboard closed (OpenAI provider). */
     private val live = LiveVoice(app, publish = { _state.value = it }, fail = ::fail, settled = ::settle)
@@ -109,8 +141,11 @@ class TurnController(private val app: App) : Gestures.Listener {
     private var noteJob: Job? = null
     private var pressGeneration = 0L
     private var updateBlockedPress = false
+    private var dictationBlockedPress = false
+    private var destination = CapturedInput<DictationTarget>(null)
+    private var transcriptionConfig = app.store.value
 
-    private class Turn(val id: Long, val conversation: String) {
+    private class Turn(val id: Long, val conversation: String, val input: CapturedInput<DictationTarget>, val sttConfig: Config) {
         var job: Job? = null
         var speaker: Speaker? = null
         val reply = StringBuffer()
@@ -137,8 +172,12 @@ class TurnController(private val app: App) : Gestures.Listener {
         app.screen.notePress()
         val stoppedLive = live.interrupt()
         interrupted = stopActive() || stoppedLive
-        dictating = target?.isActive() == true
         val cfg = app.store.value
+        destination = CapturedInput(target?.takeIf { it.isActive() })
+        dictating = destination.target != null
+        dictationBlockedPress = (destination.target == null && privateInputScreen) || destination.target?.canDictate() == false
+        if (dictationBlockedPress) return
+        transcriptionConfig = cfg // a mid-press settings change cannot redirect private audio
         // Keyboard closed → speech-to-speech (if available); keyboard open → dictation via transcription.
         liveTurn = !dictating && cfg.liveVoice
         // Dictation (and agent voice turns) stream through live transcription when it's on OpenAI.
@@ -153,11 +192,11 @@ class TurnController(private val app: App) : Gestures.Listener {
         if (streamTurn) {
             val generation = pressGeneration
             lateinit var s: SttStream
-            s = SttStream(app, onPartial = { if (generation == pressGeneration) partial(it) }, onFailure = { message ->
+            s = SttStream(app, config = cfg, onPartial = { if (generation == pressGeneration) partial(it) }, onFailure = { message ->
                 if (stream === s) {
                     stream = null
                     s.cancel()
-                    target?.keepPartial()
+                    destination.target?.takeIf { it === target }?.keepPartial()
                     fail(message)
                     settle()
                 }
@@ -175,6 +214,7 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     override fun onHoldStart() {
         if (updateBlockedPress || app.updates.installing) return
+        if (dictationBlockedPress) { target?.dictationUnavailable(); return }
         app.store.loadError?.let { fail(it); settle(); return }
         val cfg = app.store.value
         val micMissing = when {
@@ -195,11 +235,12 @@ class TurnController(private val app: App) : Gestures.Listener {
             return
         }
         _state.value = TurnState(phase = if (dictating) Phase.DICTATING else Phase.LISTENING)
-        if (streamTurn) stream?.hold() else Http.warm(cfg.stt.baseUrl)
+        if (streamTurn) stream?.hold() else Http.warm(transcriptionConfig.stt.baseUrl)
     }
 
     override fun onHoldEnd() {
         if (updateBlockedPress || app.updates.installing) return
+        if (dictationBlockedPress) return
         if (app.store.loadError != null) return settle()
         if (liveTurn) {
             live.holdEnd()
@@ -210,7 +251,7 @@ class TurnController(private val app: App) : Gestures.Listener {
             stream = null
             if (s.durationMs < MIN_CLIP_MS || s.peak < SILENCE) {
                 s.cancel()
-                target?.clearPartial()
+                destination.target?.takeIf { it === target }?.clearPartial()
                 note("Didn't hear anything")
             } else {
                 launch(id = s.turnId, emitStart = false) { turn -> transcribeStream(turn, s) }
@@ -224,7 +265,7 @@ class TurnController(private val app: App) : Gestures.Listener {
         when {
             clip == null -> fail("Recording failed")
             clip.durationMs < MIN_CLIP_MS || clip.peak < SILENCE -> {
-                discard(clip)
+                discard(clip, destination.target?.privateDictation() == true)
                 note("Didn't hear anything")
             }
             else -> launch { turn -> transcribe(turn, clip) }
@@ -234,6 +275,7 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     override fun onShortRelease() {
         if (updateBlockedPress || app.updates.installing) return
+        if (dictationBlockedPress) return
         if (liveTurn) live.shortRelease(stoppedReply = interrupted)
         stream?.cancel()
         stream = null
@@ -247,6 +289,7 @@ class TurnController(private val app: App) : Gestures.Listener {
         val t = target
         when {
             interrupted -> interrupted = false // that press already stopped the reply
+            privateInputScreen && app.screen.tapWasWake() -> {} // waking a private draft cannot review/send it
             t != null && t.isActive() -> if (!t.sendTyped()) t.hideKeyboard()
             app.screen.tapWasWake() -> {} // the tap that turned the screen on
             else -> app.screen.sleepNow()
@@ -255,6 +298,12 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     override fun onDoubleTap() {
         if (updateBlockedPress || app.updates.installing) return
+        if (privateInputScreen || target?.takeIf { it.isActive() }?.consumeDoubleTap() == true) {
+            pressGeneration++
+            stopActive()
+            settle()
+            return
+        }
         pressGeneration++
         interrupted = false
         live.reset()
@@ -266,10 +315,13 @@ class TurnController(private val app: App) : Gestures.Listener {
     /** Screen on: with the keyboard closed, the next thing is probably a voice turn. */
     fun screenOn() {
         if (app.updates.installing) return
-        if (target?.isActive() != true) live.warm()
+        if (!privateInputScreen && target?.isActive() != true) live.warm()
     }
 
     fun screenOff() = live.screenOff()
+
+    /** Refresh opt-in local capabilities on the next voice connection, without interrupting speech. */
+    fun refreshVoiceContext() { if (!busy) live.reset() }
 
     /** Service termination is terminal for microphone, sockets, playback and the wake lock. */
     fun shutdown() {
@@ -287,6 +339,9 @@ class TurnController(private val app: App) : Gestures.Listener {
         pressGeneration++
         live.reset() // the next voice turn starts a fresh session that knows about this exchange
         stopActive()
+        destination = CapturedInput(null)
+        dictating = false
+        dictationBlockedPress = false
         app.radio.onActivity()
         app.screen.holdAwake()
         launch { turn -> ask(turn, text) }
@@ -302,7 +357,7 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     private fun launch(id: Long = TurnMetrics.next(), emitStart: Boolean = true, block: suspend (Turn) -> Unit) {
-        val turn = Turn(id, app.history.convId)
+        val turn = Turn(id, app.history.convId, destination, transcriptionConfig)
         if (emitStart) TurnMetrics.event("turn_start", id, "mode" to 2L, "warm" to 0L, "ready" to 0L, "connection" to 0L)
         current = turn
         turn.job = scope.launch {
@@ -311,7 +366,8 @@ class TurnController(private val app: App) : Gestures.Listener {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                Log.w(TAG, "turn failed", e)
+                if (turn.input.target?.privateDictation() == true) Log.w(TAG, "Private dictation failed")
+                else Log.w(TAG, "turn failed", e)
                 TurnMetrics.event("session_failed", turn.id)
                 if (current === turn) fail(friendly(e))
             } finally {
@@ -328,20 +384,20 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     private suspend fun transcribe(turn: Turn, clip: Clip) {
-        val cfg = app.store.value
+        val cfg = turn.sttConfig
         _state.value = TurnState(phase = Phase.TRANSCRIBING)
         val text = try {
             awaitNetwork()
             io { calls -> stt.transcribe(cfg, clip, calls) }
         } finally {
-            discard(clip)
+            discard(clip, turn.input.target?.privateDictation() == true)
         }
         handleTranscript(turn, text)
     }
 
     /** Live-transcribed press: the final text is usually ready ~0.5 s after release. */
     private suspend fun transcribeStream(turn: Turn, s: SttStream) {
-        val cfg = app.store.value
+        val cfg = turn.sttConfig
         _state.update { it.copy(phase = Phase.TRANSCRIBING, level = 0f) }
         try {
             val text = s.finish() ?: run {
@@ -353,37 +409,36 @@ class TurnController(private val app: App) : Gestures.Listener {
                     awaitNetwork()
                     io { calls -> stt.transcribe(cfg, clip, calls) }
                 } finally {
-                    discard(clip)
+                    discard(clip, turn.input.target?.privateDictation() == true)
                 }
             }
             handleTranscript(turn, text)
         } finally {
             s.cancel()
-            if (current === turn) target?.keepPartial() // a superseded turn cannot change the new provisional span
+            if (current === turn) turn.input.target?.takeIf { it === target }?.keepPartial()
         }
     }
 
     /** Dictation goes into the text field; anything else is a question for the backend. */
     private suspend fun handleTranscript(turn: Turn, transcript: String) {
         val text = transcript.trim()
-        val t = target
+        val route = turn.input.route(target, target?.isActive() == true)
         if (text.isEmpty()) {
-            t?.clearPartial()
+            if (route == InputRoute.DRAFT) turn.input.target?.clearPartial()
             note("Didn't catch that")
             return
         }
-        if (dictating && t != null) {
-            t.insert(text)
-            idle()
-            return
+        when (route) {
+            InputRoute.CHAT -> ask(turn, text)
+            InputRoute.DRAFT -> { turn.input.target?.insert(text); idle() }
+            InputRoute.DISCARDED -> idle() // leaving a draft never sends its words to the AI backend
         }
-        ask(turn, text)
     }
 
     /** Words so far from live transcription: in the text field when dictating, else on screen. */
     private fun partial(text: String) {
         if (dictating) {
-            target?.showPartial(text)
+            if (destination.route(target, target?.isActive() == true) == InputRoute.DRAFT) destination.target?.showPartial(text)
         } else {
             _state.update {
                 if (it.phase == Phase.LISTENING || it.phase == Phase.TRANSCRIBING) it.copy(heard = text) else it
@@ -392,11 +447,15 @@ class TurnController(private val app: App) : Gestures.Listener {
     }
 
     private suspend fun ask(turn: Turn, text: String) {
+        app.smsAssistant.command(text)?.let { command ->
+            note(if (app.smsAssistant.open(command)) "SMS draft opened · review it before sending" else "Couldn't open Messages. No text was sent.")
+            return
+        }
         val cfg = app.store.value
         app.history.add(Msg.USER, text)
         _state.value = TurnState(phase = Phase.THINKING)
         awaitNetwork()
-        val req = ChatRequest.build(cfg, app.history.messages, app.history.convId)
+        val req = ChatRequest.build(cfg.copy(systemPrompt = cfg.systemPrompt + app.smsAssistant.instructions()), app.history.messages, app.history.convId)
         val speaker = if (cfg.tts.enabled) {
             Speaker(tts::call, cfg.tts.sampleRate).also { turn.speaker = it; it.start() }
         } else null
@@ -469,7 +528,7 @@ class TurnController(private val app: App) : Gestures.Listener {
         recorder = null
         stream?.cancel()
         stream = null
-        target?.keepPartial() // a dictation cut short keeps the words already shown
+        destination.target?.takeIf { it === target }?.keepPartial()
         if (wasActive) _state.value = TurnState()
         return wasActive
     }
@@ -506,8 +565,8 @@ class TurnController(private val app: App) : Gestures.Listener {
 
     private fun clipDir() = File(app.cacheDir, "clips")
 
-    private fun discard(clip: Clip) {
-        if (app.store.value.saveClips) {
+    private fun discard(clip: Clip, privateDraft: Boolean = false) {
+        if (app.store.value.saveClips && !privateDraft) {
             runCatching {
                 val keep = File(app.getExternalFilesDir("clips"), clip.file.name)
                 clip.file.copyTo(keep, overwrite = true)
