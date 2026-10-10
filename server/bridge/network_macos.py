@@ -32,7 +32,7 @@ def renew(hostname):
     certs.mkdir(exist_ok=True, mode=0o700)
     with tempfile.TemporaryDirectory(dir=certs) as directory:
         cert, key = Path(directory) / 'cert.pem', Path(directory) / 'key.pem'
-        subprocess.run(TS + ['cert', '--cert-file=' + str(cert), '--key-file=' + str(key), hostname], check=True)
+        subprocess.run(TS + ['cert', '--min-validity=48h', '--cert-file=' + str(cert), '--key-file=' + str(key), hostname], check=True)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(cert, key)  # Reject an incomplete or mismatched pair before activation.
         active = certs / 'current'
