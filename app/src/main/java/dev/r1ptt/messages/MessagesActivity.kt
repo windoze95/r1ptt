@@ -240,7 +240,7 @@ class MessagesActivity : Activity(), DictationTarget {
         when (screen) {
             Screen.THREADS -> {
                 if (mmsNotices > 0) container.addView(label("$mmsNotices MMS notice(s) saved on this device. robotOS cannot download pictures or group MMS. Choose an MMS-capable default app in Android settings and ask the sender to resend; the notice is not an imported MMS.", 14f))
-                replyRequests.forEach { (id, requested) -> container.addView(button("Review call reply · ${requested.peer}") {
+                replyRequests.forEach { (id, requested) -> container.addView(button("Review saved draft · ${requested.peer}") {
                     replaceDraft(requested) { sms.removeReplyRequest(id) }
                 }) }
                 if (threads.isEmpty()) container.addView(label("Your texts will appear here.\n\nSMS only · one recipient at a time. Pictures, group MMS, RCS, and old inbox import are not included.", 15f))
@@ -251,6 +251,13 @@ class MessagesActivity : Activity(), DictationTarget {
             }
             Screen.CONVERSATION -> {
                 container.addView(label(peer.orEmpty(), 17f).apply { setTextColor(getColor(R.color.accent)) })
+                if (app.store.value.bridge.enabled) container.addView(button("Block this recipient in relay") {
+                    val number = peer ?: return@button
+                    ui?.launch {
+                        app.bridge.block(number)
+                        status.text = "Recipient blocked in relay. Queued relay sends are cancelled."
+                    }
+                })
                 if (rows.size == 100) container.addView(label("Showing the newest 100 texts. Older texts remain stored on this device.", 12f))
                 rows.forEach { record ->
                     container.addView(label(record.body, 16f).apply {
@@ -267,6 +274,7 @@ class MessagesActivity : Activity(), DictationTarget {
                             .setNegativeButton("Cancel", null))
                     })
                     if (!record.incoming) container.addView(button("Message details") { details(record) })
+                    if (record.incoming && app.store.value.bridge.enabled) container.addView(button("Ask Hermes about this") { selectedMessage(record) })
                 }
             }
             Screen.COMPOSE -> container.addView(label(
@@ -401,6 +409,7 @@ class MessagesActivity : Activity(), DictationTarget {
             if (SmsRole.held(this)) "robotOS is the default SMS app" else "Make robotOS the default SMS app",
             "SMS diagnostics",
             "Recent assistant outcomes",
+            "SMS relay",
         )
         showDialog(AlertDialog.Builder(this).setTitle("Messages options").setItems(options) { _, which ->
             when (which) {
@@ -413,8 +422,28 @@ class MessagesActivity : Activity(), DictationTarget {
                 6 -> defaultSmsInfo()
                 7 -> details(null)
                 8 -> startActivity(Intent(this, dev.r1ptt.OutcomesActivity::class.java))
+                9 -> startActivity(Intent(this, dev.r1ptt.bridge.BridgeActivity::class.java))
             }
         })
+    }
+
+    private fun selectedMessage(record: SmsRecord) {
+        if (dev.r1ptt.bridge.BridgePolicy.sensitive(record.body) || !dev.r1ptt.bridge.BridgePolicy.destination(record.peer)) {
+            status.text = "Security texts and service numbers stay on the R1."
+            return
+        }
+        val host = runCatching { java.net.URI(app.store.value.bridge.baseUrl).host }.getOrNull().orEmpty()
+        showDialog(AlertDialog.Builder(this).setTitle("Share this one text?")
+            .setMessage("Send only this selected message to the restricted Hermes profile through $host for an explanation? Check that it contains no codes or private credentials. The sender must be saved locally. This does not authorize a reply. Request content expires after 24 hours; replay-protection IDs remain.")
+            .setNegativeButton("Keep local", null)
+            .setPositiveButton("Ask Hermes") { _, _ ->
+                ui?.launch {
+                    try {
+                        app.bridge.select(record)
+                        startActivity(Intent(this@MessagesActivity, dev.r1ptt.bridge.BridgeActivity::class.java))
+                    } catch (_: Exception) { status.text = "This message could not be shared. Check relay settings and saved recipients." }
+                }
+            })
     }
 
     private fun details(record: SmsRecord?) {

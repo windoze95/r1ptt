@@ -58,6 +58,8 @@ class CallRegistry {
         if (cancelled) call.cancel()
     }
 
+    fun remove(call: Call) { calls -= call }
+
     fun cancelAll() {
         cancelled = true
         calls.forEach { it.cancel() }

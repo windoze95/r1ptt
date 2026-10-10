@@ -7,6 +7,12 @@ plugins {
 // Ordinary local builds retain their existing version and local debug signing behavior.
 val releaseTag = providers.gradleProperty("releaseTag").orNull
 val releaseSigning = providers.gradleProperty("releaseSigning").orNull == "true"
+// Local acceptance builds can keep the installed version code so the next official
+// release remains an upgrade, while clearly identifying the unpublished build.
+val localBuildSuffix = providers.gradleProperty("localBuildSuffix").orNull
+require(localBuildSuffix == null || localBuildSuffix.matches(Regex("[a-z0-9][a-z0-9.-]{0,31}"))) {
+    "localBuildSuffix must be a short lowercase build label"
+}
 val releaseCode = releaseTag?.let { tag ->
     val parts = Regex("v(0|[1-9][0-9]{0,3})\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})").matchEntire(tag)
         ?: error("releaseTag must be vMAJOR.MINOR.PATCH")
@@ -30,7 +36,7 @@ android {
         minSdk = 33
         targetSdk = 34
         versionCode = releaseCode ?: 1
-        versionName = releaseTag?.drop(1) ?: "0.1.0"
+        versionName = (releaseTag?.drop(1) ?: "0.1.0") + (localBuildSuffix?.let { "-$it" } ?: "")
     }
 
     if (releaseSigning) signingConfigs.create("distribution") {

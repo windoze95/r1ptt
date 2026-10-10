@@ -1,5 +1,9 @@
 # Using Hermes Agent as the backend
 
+For the isolated, per-device **SMS relay**, follow [docs/RELAY.md](../docs/RELAY.md).
+Its restricted Runs API profile and device credential are separate from the
+general chat setup below; do not put its full Hermes API key on the phone.
+
 The R1 talks to Hermes through its API server's OpenAI-compatible `/v1/chat/completions` endpoint.
 
 ## 1. Turn on the API server

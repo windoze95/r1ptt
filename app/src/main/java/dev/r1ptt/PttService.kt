@@ -46,6 +46,7 @@ class PttService : Service() {
                     app.radio.onScreenOn()
                     app.battery.record(c, "screen_on")
                     app.turns.screenOn()
+                    dev.r1ptt.bridge.RelayService.start(app)
                 }
             }
         }

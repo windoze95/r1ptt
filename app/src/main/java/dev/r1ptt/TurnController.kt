@@ -27,6 +27,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -159,6 +161,7 @@ class TurnController(
         val reply = StringBuffer()
         var replySaved = false
         var sms: SmsAssistant.Request? = null
+        var bridgeCommand: String? = null
     }
 
     init {
@@ -375,6 +378,7 @@ class TurnController(
                 block(turn)
                 completed = true
             } catch (e: CancellationException) {
+                turn.bridgeCommand?.let { withContext(NonCancellable) { app.bridge.cancel(it) } }
                 app.outcomes.finishIfOpen(turn.outcome, OutcomeStatus.CANCELLED)
                 throw e
             } catch (e: Throwable) {
@@ -392,7 +396,8 @@ class TurnController(
                     TurnMetrics.event("exchange_complete", turn.id)
                     settle()
                     if (completed) {
-                        if (turn.sms != null) sendSms(turn.sms!!) else app.outcomes.finishIfOpen(turn.outcome, OutcomeStatus.COMPLETED)
+                        if (turn.sms != null) sendSms(turn.sms!!)
+                        else if (turn.bridgeCommand == null) app.outcomes.finishIfOpen(turn.outcome, OutcomeStatus.COMPLETED)
                     }
                 }
             }
@@ -464,6 +469,18 @@ class TurnController(
 
     private suspend fun ask(turn: Turn, text: String) {
         val cfg = app.store.value
+        if (assistant.enabled && cfg.bridge.enabled && dev.r1ptt.bridge.BridgePolicy.request(text)) {
+            try {
+                turn.bridgeCommand = turn.outcome
+                app.bridge.enqueueOwner(text, turn.outcome)
+                replyLocally(turn, "Request saved. SMS relay will prepare it and show the result in Messages.")
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                app.outcomes.update(turn.outcome, OutcomeStatus.FAILED, OutcomeReason.UNAVAILABLE)
+                replyLocally(turn, e.message ?: "The request could not be saved. No text was sent.")
+            }
+            return
+        }
         if (assistant.enabled) {
             val decision = try {
                 _state.value = TurnState(phase = Phase.THINKING, note = "Checking the requested action…")

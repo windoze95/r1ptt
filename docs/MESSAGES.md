@@ -1,5 +1,9 @@
 # Messages
 
+The optional [Hermes SMS relay](RELAY.md) preserves the native SMS executor and
+adds durable owner commands, unsent drafts, and selected-message explanations.
+It starts disabled; enabling it and docked availability are separate controls.
+
 Messages is a personal SMS handler inside the existing robotOS APK. It uses Android’s SMS
 service and your SIM. You can choose robotOS as the default SMS app through Android’s role
 dialog, or use its optional SMS companion controls. It does not replace the GSI, enable the stock

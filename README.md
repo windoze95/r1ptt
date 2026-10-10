@@ -69,6 +69,12 @@ recipients and retains brief result categories, including failures; it contains 
 recipient numbers.
 MMS, RCS, old inbox import, and live carrier acceptance are not included. See [docs/MESSAGES.md](docs/MESSAGES.md).
 
+An optional [Hermes SMS relay](docs/RELAY.md) adds durable owner commands, unsent
+drafts, selected-message explanations, and opt-in availability while plugged in.
+It starts disabled and uses Tailscale first, with a manually selected WireGuard
+fallback. Its device, VPN, carrier, and overnight power acceptance must be recorded
+separately from automated checks.
+
 ## Battery
 
 Idle time is where a 1000 mAh battery goes.
@@ -77,12 +83,14 @@ Idle time is where a 1000 mAh battery goes.
   data (SIM)** enabled, it wakes with the device and returns to airplane mode at the normal idle cut.
 - **Wi-Fi switches off** after 3 minutes with the screen dark. The next button press turns it back
   on, and it reconnects while you're still talking.
-- **No continuous background polling:**
+- **No continuous background polling in pocket mode:**
   - no polling, scanning, location or Bluetooth;
   - Rabbit's apps are removed;
   - Doze starts within seconds.
   - Optional incoming SMS use Android broadcasts while the modem is reachable. Messages does not
     keep it awake; carrier-queued delivery after wake is not guaranteed.
+  - The optional docked relay keeps radios available only while externally powered
+    and its power guards allow it; see [docs/RELAY.md](docs/RELAY.md).
 - **The screen stays on only during a turn**, then times out after 15 s at low brightness.
 - **The network is used only during a turn:** voice streams only while you hold the button, and the
   live session closes 20 s after a reply.
