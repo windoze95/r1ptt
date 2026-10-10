@@ -7,9 +7,6 @@ enum class SessionMode(val id: String) {
     /** Stateless server: the app sends the last N messages every turn (OpenAI and most servers). */
     HISTORY("history"),
 
-    /** OpenClaw: only the new message is sent; the gateway keys its agent session off the `user` field. */
-    OPENCLAW_USER("openclaw-user"),
-
     /** Hermes Agent: only the new message is sent; `X-Hermes-Session-Id` continues the server-side transcript. */
     HERMES_SESSION("hermes-session");
 
@@ -111,7 +108,10 @@ data class Config(
     /** evdev name of the side button's input device. */
     val buttonDevice: String = "mtk-kpd",
 ) {
-    val provider: Provider get() = providers[activeProvider] ?: providers.values.first()
+    /** Retired profiles stay in encrypted storage, but cannot be selected or supply credentials. */
+    val availableProviders: Map<String, Provider> get() = providers.filterKeys { it !in RETIRED_PROVIDER_IDS }
+    val provider: Provider get() = availableProviders[activeProvider] ?: availableProviders.values.firstOrNull()
+        ?: Presets.providers.getValue("openai")
 
     /** Voice turns go speech-to-speech only on OpenAI; agent backends need their own pipeline. */
     val liveVoice: Boolean get() = live.enabled && provider.id == "openai" && keyFor(liveEndpoint).isNotBlank()
@@ -125,13 +125,15 @@ data class Config(
     fun keyFor(endpoint: Endpoint): String {
         if (endpoint.apiKey.isNotBlank()) return endpoint.apiKey
         val host = hostOf(endpoint.baseUrl) ?: return ""
-        return (listOf(provider) + providers.values)
+        return (listOf(provider) + availableProviders.values)
             .firstOrNull { hostOf(it.baseUrl) == host && it.apiKey.isNotBlank() }
             ?.apiKey.orEmpty()
     }
 
     companion object {
         const val OPENAI_URL = "https://api.openai.com/v1"
+        // Compatibility marker only: preserve old credentials without keeping the integration active.
+        internal val RETIRED_PROVIDER_IDS = setOf("openclaw")
 
         const val DEFAULT_STYLE =
             "You are answering through a tiny push-to-talk device with a 2.9-inch screen, and your " +
@@ -147,10 +149,6 @@ object Presets {
         Provider(
             id = "openai", label = "ChatGPT (OpenAI)", baseUrl = Config.OPENAI_URL, model = "gpt-6.1-sol",
             extraBody = """{"reasoning_effort":"low","verbosity":"low"}""",
-        ),
-        Provider(
-            id = "openclaw", label = "OpenClaw", baseUrl = "http://openclaw.local:18789/v1",
-            model = "openclaw/default", session = SessionMode.OPENCLAW_USER, timeoutSec = 300,
         ),
         Provider(
             id = "hermes", label = "Hermes Agent", baseUrl = "http://hermes.local:8642/v1",

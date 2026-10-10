@@ -77,7 +77,7 @@ class SettingsActivity : Activity() {
 
         header("Backend")
         val group = RadioGroup(this)
-        cfg.providers.values.forEach { p ->
+        cfg.availableProviders.values.forEach { p ->
             val rb = RadioButton(this).apply {
                 id = View.generateViewId()
                 text = p.label
@@ -85,7 +85,7 @@ class SettingsActivity : Activity() {
             }
             providerByView[rb.id] = p.id
             group.addView(rb)
-            if (p.id == cfg.activeProvider) group.check(rb.id)
+            if (p.id == cfg.provider.id) group.check(rb.id)
         }
         root.addView(group)
         baseUrl = field("Base URL")
@@ -160,7 +160,7 @@ class SettingsActivity : Activity() {
 
     private fun save() {
         stashProvider()
-        val bad = cfg.providers.values.firstOrNull { runCatching { JSONObject(it.extraBody) }.isFailure }
+        val bad = cfg.availableProviders.values.firstOrNull { runCatching { JSONObject(it.extraBody) }.isFailure }
         if (bad != null) {
             toast("${bad.label}: extra request JSON isn't valid JSON")
             return

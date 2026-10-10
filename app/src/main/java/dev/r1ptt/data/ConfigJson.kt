@@ -9,7 +9,7 @@ import org.json.JSONObject
 object ConfigJson {
 
     fun toJson(c: Config): JSONObject = JSONObject().apply {
-        put("activeProvider", c.activeProvider)
+        put("activeProvider", c.activeProvider.takeUnless { it in Config.RETIRED_PROVIDER_IDS } ?: c.provider.id)
         put("providers", JSONObject().apply { c.providers.forEach { (id, p) -> put(id, provider(p)) } })
         put("systemPrompt", c.systemPrompt)
         put("historyMessages", c.historyMessages)
@@ -59,7 +59,8 @@ object ConfigJson {
         val live = j.optJSONObject("live")
         val power = j.optJSONObject("power")
         return base.copy(
-            activeProvider = j.str("activeProvider", base.activeProvider),
+            activeProvider = j.str("activeProvider", base.activeProvider)
+                .takeUnless { it in Config.RETIRED_PROVIDER_IDS } ?: base.provider.id,
             providers = providers,
             systemPrompt = j.str("systemPrompt", base.systemPrompt),
             historyMessages = j.int("historyMessages", base.historyMessages),

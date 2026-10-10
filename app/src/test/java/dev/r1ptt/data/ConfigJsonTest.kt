@@ -2,6 +2,7 @@ package dev.r1ptt.data
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -52,10 +53,44 @@ class ConfigJsonTest {
     fun audioEndpointsBorrowTheKeyOfAProviderOnTheSameHost() {
         val c = ConfigJson.merge(
             Config(),
-            JSONObject("""{"activeProvider":"openclaw","providers":{"openai":{"apiKey":"sk-o"},"openclaw":{"apiKey":"tok"}}}"""),
+            JSONObject("""{"activeProvider":"hermes","providers":{"openai":{"apiKey":"sk-o"},"hermes":{"apiKey":"tok"}}}"""),
         )
-        assertEquals("sk-o", c.keyFor(c.stt)) // STT is on api.openai.com even though OpenClaw is active
+        assertEquals("sk-o", c.keyFor(c.stt)) // STT is on api.openai.com even though Hermes is active
         assertEquals("own", c.keyFor(c.stt.copy(apiKey = "own")))
         assertEquals("", c.keyFor(Endpoint("http://speaches.lan:8000/v1", model = "x")))
+    }
+
+    @Test
+    fun retiredProfilesRemainStoredButCannotBeSelectedOrSupplyKeys() {
+        assertFalse(Config().providers.containsKey("openclaw"))
+        val c = ConfigJson.merge(Config(), JSONObject("""{
+            "activeProvider":"openclaw",
+            "providers":{"openclaw":{"baseUrl":"http://retired.example/v1","apiKey":"retained-test-token",
+                "model":"retired","session":"openclaw-user","headers":{"X-Private":"retained-test-header"}}},
+            "power":{"wifiIdleMinutes":0,"brightness":42}
+        }"""))
+        assertFalse(c.availableProviders.containsKey("openclaw"))
+        assertEquals("openai", c.activeProvider)
+        assertEquals("openai", c.provider.id)
+        assertEquals("", c.keyFor(Endpoint("http://retired.example/v1", model = "speech")))
+        assertEquals(0, c.power.wifiIdleMinutes)
+        assertEquals(42, c.power.brightness)
+        val back = ConfigJson.merge(Config(), ConfigJson.toJson(c))
+        assertEquals("retained-test-token", back.providers.getValue("openclaw").apiKey)
+        assertEquals(mapOf("X-Private" to "retained-test-header"), back.providers.getValue("openclaw").headers)
+        assertFalse(back.availableProviders.containsKey("openclaw"))
+    }
+
+    @Test
+    fun rejectedRetiredSelectionKeepsAnExistingHermesSelectionAndCustomProfile() {
+        val base = ConfigJson.merge(Config(), JSONObject("""{
+            "activeProvider":"hermes",
+            "providers":{"hermes":{"apiKey":"hermes-test-key"},
+                "lan":{"baseUrl":"http://lan.example/v1","model":"custom","apiKey":"lan-test-key"}}
+        }"""))
+        val c = ConfigJson.merge(base, JSONObject("""{"activeProvider":"openclaw"}"""))
+        assertEquals("hermes", c.activeProvider)
+        assertEquals(base.provider, c.provider)
+        assertEquals(base.providers.getValue("lan"), c.availableProviders.getValue("lan"))
     }
 }

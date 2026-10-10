@@ -1,7 +1,9 @@
 package dev.r1ptt.net
 
 import dev.r1ptt.data.Config
+import dev.r1ptt.data.ConfigJson
 import dev.r1ptt.data.Msg
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -45,15 +47,17 @@ class ChatRequestTest {
     }
 
     @Test
-    fun openClawSendsOnlyTheNewMessageWithAStableUser() {
-        val b = ChatRequest.build(cfg("openclaw"), conversation, "abc")
-        assertEquals("http://openclaw.local:18789/v1/chat/completions", b.url)
-        assertEquals("r1ptt-abc", b.body.getString("user"))
-        assertEquals("openclaw/default", b.body.getString("model"))
-        val msgs = b.body.getJSONArray("messages")
-        assertEquals(2, msgs.length()) // system + newest user message
-        assertEquals("what's my name?", msgs.getJSONObject(1).getString("content"))
-        assertEquals(300, b.timeoutSec)
+    fun retiredConfigurationCannotConstructAGatewayRequest() {
+        val c = ConfigJson.merge(Config(), JSONObject("""{
+            "activeProvider":"openclaw","providers":{"openclaw":{
+                "baseUrl":"http://retired.example/v1","apiKey":"unused-test-token",
+                "model":"retired","session":"openclaw-user"}}
+        }"""))
+        val b = ChatRequest.build(c, conversation, "abc")
+        assertEquals("https://api.openai.com/v1/chat/completions", b.url)
+        assertNull(b.headers["Authorization"])
+        assertFalse(b.body.has("user"))
+        assertEquals(4, b.body.getJSONArray("messages").length())
     }
 
     @Test

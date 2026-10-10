@@ -54,4 +54,11 @@ Set `"session": "history"` on the hermes provider, and the R1 will send the rece
 ## Security
 
 The API key gives full control of your agent. Keep the server on your LAN or tailnet. For use away
-from home, the options are the same as in [openclaw.md](openclaw.md#away-from-home).
+from home, connect through a VPN or an HTTPS reverse proxy that checks a credential. For example,
+an access proxy's service-token headers can be set on the provider:
+
+```json
+"headers": { "CF-Access-Client-Id": "...", "CF-Access-Client-Secret": "..." }
+```
+
+Keep the API server private, and rotate its API key if the R1 is lost.
