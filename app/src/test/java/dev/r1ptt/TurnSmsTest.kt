@@ -52,7 +52,14 @@ class TurnSmsTest {
     private val interpreted = CopyOnWriteArrayList<String>()
     private val text = "Could you send Sam a message saying Meet at six."
     private val action = SmsIntent.Send(SmsComposeAction("Sam", "Meet at six."))
-    private var resolver: (AppConfig, String, CallRegistry) -> SmsIntent = { _, input, _ -> interpreted.add(input); action }
+    private val fixtures = mapOf(
+        text to action,
+        "Text Unlisted: Meet at six." to SmsIntent.Send(SmsComposeAction("Unlisted", "Meet at six.")),
+    )
+    private var resolver: (AppConfig, String, CallRegistry) -> SmsIntent = { _, input, _ ->
+        interpreted.add(input)
+        requireNotNull(fixtures[input]) { "Unexpected synthetic resolver input" }
+    }
 
     @Before fun setup() {
         app = RuntimeEnvironment.getApplication() as App
@@ -95,6 +102,29 @@ class TurnSmsTest {
     private fun speechEndpoint(server: MockWebServer) = configure {
         it.copy(tts = it.tts.copy(enabled = true, endpoint = it.tts.endpoint.copy(baseUrl = server.url("/v1").toString())))
     }
+    private fun intentEndpoint(server: MockWebServer) {
+        configure { it.copy(activeProvider = "openai", providers = it.providers +
+            ("openai" to it.providers.getValue("openai").copy(baseUrl = server.url("/v1").toString()))) }
+        resolver = SmsIntentClient()::resolve
+    }
+    private fun intentResponse(recipient: String, body: String, kind: String = "sms"): MockResponse {
+        val decision = JSONObject().put("kind", kind).put("recipient", recipient).put("body", body)
+        val response = JSONObject().put("choices", JSONArray().put(JSONObject()
+            .put("message", JSONObject().put("content", decision.toString())).put("finish_reason", "stop")))
+        return MockResponse().setHeader("Content-Type", "application/json").setBody(response.toString())
+    }
+    private fun assertIntentRequest(server: MockWebServer, input: String): String {
+        val request = requireNotNull(server.takeRequest(2, TimeUnit.SECONDS))
+        assertEquals("/v1/chat/completions", request.path)
+        val body = JSONObject(request.body.readUtf8())
+        assertTrue(body.getBoolean("stream"))
+        val messages = body.getJSONArray("messages")
+        assertEquals(2, messages.length())
+        assertEquals("system", messages.getJSONObject(0).getString("role"))
+        assertEquals("user", messages.getJSONObject(1).getString("role"))
+        assertEquals(input, messages.getJSONObject(1).getString("content"))
+        return messages.getJSONObject(0).getString("content")
+    }
     private fun assertGenericReply() {
         assertEquals(Msg.ASSISTANT, app.history.messages.single().role)
         assertTrue(app.history.messages.single().text.contains("No text was sent"))
@@ -133,6 +163,133 @@ class TurnSmsTest {
         }
         assertEquals(listOf(text, text, text), interpreted)
         assertEquals(listOf("Sending…", "Sending…", "Sending…"), app.history.messages.map { it.text })
+    }
+
+    @Test fun bodylessCompletedVoiceRequestUsesRealIntentClientToComposeAndDispatchOnce() {
+        MockWebServer().use { server ->
+            server.start(); intentEndpoint(server)
+            val input = "send a text to +15551234567"
+            val generated = "Hi, just checking in!"
+            assertFalse(input.contains(generated))
+            server.enqueue(intentResponse("+15551234567", generated))
+            completedVoice(input)
+            await { records.size == 1 && app.outcomes.list().single().status == OutcomeStatus.HANDOFF && !turns.busy }
+            drain()
+            assertIntentRequest(server, input)
+            assertEquals(1, server.requestCount)
+            assertEquals(1, transportCalls)
+            assertEquals("+15551234567", records.single().peer)
+            assertEquals(generated, records.single().body)
+            assertEquals(OutcomeSource.VOICE, app.outcomes.list().single().source)
+            assertEquals(listOf("Sending…"), app.history.messages.map { it.text })
+            assertEquals(MessagesActivity::class.java.name, shadowOf(app).nextStartedActivity.component?.className)
+            assertNull(shadowOf(app).nextStartedActivity)
+        }
+    }
+
+    @Test fun naturalTellNameVoiceRequestSendsTheProvidersComposedBodyToTheLocalRecipient() {
+        MockWebServer().use { server ->
+            server.start(); intentEndpoint(server)
+            SmsStore(app).use { it.addRecipient("Yana", "+15557654321") }
+            val input = "Tell Yana I'm on my way"
+            val generated = "Hey Yana, I'm heading over now!"
+            assertFalse(input.contains(generated))
+            server.enqueue(intentResponse("Yana", generated))
+            completedVoice(input)
+            await { records.size == 1 && !turns.busy }
+            drain()
+            assertIntentRequest(server, input)
+            assertEquals(1, server.requestCount)
+            assertEquals(1, transportCalls)
+            assertEquals("+15557654321", records.single().peer)
+            assertEquals(generated, records.single().body)
+            assertEquals(OutcomeStatus.HANDOFF, app.outcomes.list().single().status)
+            assertEquals(listOf("Sending…"), app.history.messages.map { it.text })
+        }
+    }
+
+    @Test fun formerlyLiteralVoiceSyntaxStillUsesTheRealProviderAndItsComposedMessage() {
+        MockWebServer().use { server ->
+            server.start(); intentEndpoint(server)
+            val input = "Text Sam: Meet at six."
+            val generated = "Hi Sam, let's meet at six."
+            server.enqueue(intentResponse("Sam", generated))
+            completedVoice(input)
+            await { records.size == 1 && !turns.busy }
+            drain()
+            assertIntentRequest(server, input)
+            assertEquals(1, server.requestCount)
+            assertEquals(1, transportCalls)
+            assertEquals("+15551234567", records.single().peer)
+            assertEquals(generated, records.single().body)
+        }
+    }
+
+    @Test fun cancellationWhileRealIntentHttpResponseIsPendingCannotDispatch() {
+        MockWebServer().use { server ->
+            server.start(); intentEndpoint(server)
+            val input = "Send a text to +15551234567"
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+            completedVoice(input)
+            await { server.requestCount == 1 && turns.busy }
+            assertIntentRequest(server, input)
+            turns.onDoubleTap()
+            await { app.outcomes.list().single().status == OutcomeStatus.CANCELLED && !turns.busy }
+            drain()
+            assertEquals(1, server.requestCount)
+            assertEquals(0, transportCalls)
+            assertTrue(records.isEmpty())
+            assertTrue(app.history.messages.isEmpty())
+            assertNull(shadowOf(app).nextStartedActivity)
+        }
+    }
+
+    @Test fun explicitExactAndWordForWordVoiceRequestsPreserveTheWholeRequestedBody() {
+        MockWebServer().use { server ->
+            server.start(); intentEndpoint(server)
+            val body = "Meet at six. Bring tea!"
+            for ((index, control) in listOf("exactly", "word for word").withIndex()) {
+                val input = "Text Sam $control: $body"
+                server.enqueue(intentResponse("Sam", body, "sms_exact"))
+                completedVoice(input)
+                await { records.size == index + 1 && !turns.busy }
+                drain()
+                val instructions = assertIntentRequest(server, input)
+                assertTrue(instructions.contains("sms_exact"))
+                assertEquals(body, records.last().body)
+                assertEquals("+15551234567", records.last().peer)
+                assertEquals(OutcomeStatus.HANDOFF, app.outcomes.list().last().status)
+            }
+            assertEquals(2, server.requestCount)
+            assertEquals(2, transportCalls)
+            assertEquals(listOf("Sending…", "Sending…"), app.history.messages.map { it.text })
+        }
+    }
+
+    @Test fun exactVoiceRequestsRejectComposedModeAndRewrittenOrShortenedExactResponses() {
+        MockWebServer().use { server ->
+            server.start(); intentEndpoint(server)
+            val body = "Meet at six. Bring tea!"
+            val input = "Text Sam exactly: $body"
+            val responses = listOf(
+                intentResponse("Sam", body, "sms"),
+                intentResponse("Sam", "Let's meet at six and have tea.", "sms_exact"),
+                intentResponse("Sam", "Meet at six.", "sms_exact"),
+            )
+            for ((index, response) in responses.withIndex()) {
+                server.enqueue(response)
+                completedVoice(input)
+                await { app.outcomes.list().size == index + 1 &&
+                    app.outcomes.list().last().status == OutcomeStatus.FAILED && !turns.busy }
+                drain()
+                assertIntentRequest(server, input)
+                assertEquals(0, transportCalls)
+                assertTrue(records.isEmpty())
+                assertTrue(app.history.messages.last().text.contains("No text was sent"))
+                assertNull(shadowOf(app).nextStartedActivity)
+            }
+            assertEquals(3, server.requestCount)
+        }
     }
 
     @Test fun clarificationRemainsReadableAfterTheStatusNoticeClearsWithoutRetainingTheRequest() {

@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
@@ -12,7 +14,11 @@ import android.widget.EditText
 import android.widget.TextView
 import dev.r1ptt.App
 import dev.r1ptt.HomeActivity
+import dev.r1ptt.TurnController
+import dev.r1ptt.data.Config as AppConfig
 import dev.r1ptt.data.Msg
+import kotlinx.coroutines.flow.MutableStateFlow
+import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -30,7 +36,30 @@ import java.util.concurrent.TimeUnit
 @Config(sdk = [34], application = App::class, qualifiers = "w320dp-h426dp-mdpi")
 class MessagesActivityTest {
     private lateinit var app: App
-    @Before fun setup() { app = RuntimeEnvironment.getApplication() as App; app.deleteDatabase("messages.db") }
+    private lateinit var turns: TurnController
+    @Before fun setup() {
+        app = RuntimeEnvironment.getApplication() as App
+        app.deleteDatabase("messages.db")
+        val cm = app.getSystemService(ConnectivityManager::class.java)
+        val capabilities = NetworkCapabilities()
+        shadowOf(capabilities).addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        shadowOf(cm).setNetworkCapabilities(cm.activeNetwork, capabilities)
+        assertTrue(app.radio.isOnline())
+        @Suppress("UNCHECKED_CAST")
+        val state = app.store.javaClass.getDeclaredField("state").apply { isAccessible = true }.get(app.store) as MutableStateFlow<AppConfig>
+        state.value = state.value.copy(tts = state.value.tts.copy(enabled = false))
+        val fixtures = mapOf(
+            "Text Yana that I’m on my way" to SmsComposeAction("Yana", "I’m on my way"),
+            "Text +15551234567: Synthetic only" to SmsComposeAction("+15551234567", "Synthetic only"),
+            "Text Yana that Synthetic only" to SmsComposeAction("Yana", "Synthetic only"),
+        )
+        app.turns.shutdown()
+        turns = TurnController(app, app.smsAssistant) { _, input, _ ->
+            SmsIntent.Send(requireNotNull(fixtures[input]) { "Unexpected synthetic UI resolver input" })
+        }
+        App::class.java.getDeclaredField("turns").apply { isAccessible = true }.set(app, turns)
+    }
+    @After fun cleanup() { turns.shutdown() }
     private fun views(root: View): List<View> = listOf(root) + if (root is ViewGroup) (0 until root.childCount).flatMap { views(root.getChildAt(it)) } else emptyList()
     private fun await(condition: () -> Boolean) {
         val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)

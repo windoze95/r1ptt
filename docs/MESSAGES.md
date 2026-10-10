@@ -33,14 +33,17 @@ Messages → **Options** has separate opt-ins:
   Audio leaves the device only after this opt-in and a hold in the compose screen. Release
   inserts words into the draft. The draft, recipient, and prior texts are not supplied as context.
   Changing endpoints invalidates consent. Messages dictation clips are excluded from `saveClips`.
-- **Enable assistant SMS sending** recognizes completed requests like “Send Yana a text saying
-  I’m on my way”, “Could you please message Yana: I’m on my way”, and “Text +15551234567: I’m on my way”. This
-  sends directly without a review step when the recipient is an exact number or a unique saved
-  name. Android SMS access, a default SMS SIM, and the cellular setting are still required. The
+- **Enable assistant SMS sending** recognizes completed requests like “Tell Sam I’m on my way”
+  and “Send a text to +15551234567”. It writes a short, natural message from your intent, adding a
+  greeting or paraphrasing as appropriate. With no topic, it writes a brief neutral greeting.
+  Say “Text Sam exactly: MESSAGE” or “Text Sam word for word: MESSAGE” to preserve the entire
+  supplied message verbatim. Completed requests send directly without a review step when the
+  recipient is an exact number or a unique saved name. Android SMS access, a default SMS SIM,
+  and the cellular setting are still required. The
   old draft-only opt-in does not enable direct sending; enable this option once. Voice uses the
   configured transcription endpoint, followed by the selected chat provider. This adds an action
   interpretation step before the reply. Contextual requests such as “send that to her”, scheduled
-  sends, multiple recipients, and composing a message from a topic require clarification.
+  sends, and multiple recipients require clarification.
 - **Recent assistant outcomes** shows at most 50 local outcomes from the last three days. Each
   contains a random action ID, timestamp, input source, result/category, and optional numeric
   error code. No recipient, body, transcript, URL, API key, or raw provider error is retained here.
@@ -50,12 +53,16 @@ Messages → **Options** has separate opt-ins:
   the same name require a local choice. Missing names leave the phone field empty. No phone
   number is inferred from an AI response or invented.
 
-Literal commands are intercepted locally before ordinary chat. Other completed requests use a
-bounded, stateless intent request at the selected chat endpoint, with only the current user input.
-The full response must finish normally and identify one recipient and the exact body from that input.
-Invalid or incomplete responses report no text sent. No action is executed from partial streamed
-output. The parser receives no contact list, SMS database, or conversation history; Hermes uses a
-fresh parser session. Saved recipient names resolve locally after extraction.
+While assistant sending is enabled, every completed request—including `Text NAME: MESSAGE`—uses
+a bounded, stateless interpretation/composition request at the selected chat endpoint, with only
+the current user input. The full response must finish normally and copy one recipient from that
+input. The AI may compose the body but cannot invent or expand a recipient. It is instructed to
+convey the requested meaning without inventing facts, names, times, or commitments. Explicit exact
+controls use a separate response mode checked against the entire locally identified literal body;
+they cannot fall through to paraphrasing. Invalid or incomplete responses report no text sent. No
+action is executed from partial streamed output. The interpreter receives no contact list, SMS
+database, or conversation history; Hermes uses a fresh session. Saved recipient names resolve
+locally after extraction.
 
 The current GPT-Live speech-to-speech protocol has no client device-tool bridge. While assistant
 SMS sending is enabled, Home voice turns use completed transcription → intent → native action

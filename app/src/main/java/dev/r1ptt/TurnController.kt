@@ -465,14 +465,14 @@ class TurnController(
     private suspend fun ask(turn: Turn, text: String) {
         val cfg = app.store.value
         if (assistant.enabled) {
-            val decision = assistant.command(text)?.let { SmsIntent.Send(it) } ?: try {
+            val decision = try {
                 _state.value = TurnState(phase = Phase.THINKING, note = "Checking the requested action…")
                 awaitNetwork()
                 io { calls -> resolveIntent(cfg, text, calls) }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 app.outcomes.update(turn.outcome, OutcomeStatus.FAILED, OutcomeStore.reason(e), (e as? dev.r1ptt.net.ApiError)?.code)
-                replyLocally(turn, "Couldn't interpret the request. No text was sent. Try ‘Text NUMBER: MESSAGE’.")
+                replyLocally(turn, "Couldn't prepare that request. No text was sent. Check the assistant connection and try again.")
                 return
             }
             when (decision) {
@@ -483,7 +483,7 @@ class TurnController(
                 }
                 SmsIntent.Clarify -> {
                     app.outcomes.update(turn.outcome, OutcomeStatus.CLARIFY, OutcomeReason.REQUEST)
-                    replyLocally(turn, "Include one recipient and the exact message. No text was sent.")
+                    replyLocally(turn, "I need one clear recipient and a request to send now. I can write the message for you. No text was sent.")
                     return
                 }
                 SmsIntent.Chat -> {}

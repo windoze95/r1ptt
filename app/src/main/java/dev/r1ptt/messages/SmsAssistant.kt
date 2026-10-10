@@ -64,11 +64,11 @@ class SmsAssistant(private val app: App, private val sms: SmsController = app.sm
     }
 
     fun instructions(): String = (if (enabled)
-        " robotOS can send an explicit SMS request directly when one recipient and the exact message are provided. Assistant SMS sending is enabled. "
+        " robotOS can send an explicit SMS request directly to one clear recipient. It writes a natural message from the request, or a brief greeting when no message is supplied; exact wording is used only when explicitly requested. Assistant SMS sending is enabled. "
         else " Assistant SMS sending is disabled. It can be enabled in Messages → Options. ") +
         "This conversation response does not itself execute device actions. " +
         "Never promise to send, claim you sent, or claim delivery. Native robotOS actions and their results are handled separately before this response path. " +
-        "If asked to send a text here, explain that no text was sent and ask for one recipient and the exact message."
+        "If asked to send a text here, explain that no text was sent and ask for one clear recipient and a request to send now. The user does not need to supply exact wording."
 
     companion object {
         const val RECIPIENT = "dev.r1ptt.sms.recipient"
