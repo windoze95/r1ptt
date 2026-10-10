@@ -1,10 +1,10 @@
 robotOS builds on work by others.
 
-- ClawPTT (https://github.com/mthelpme/clawptt) and rabbit-r1-openclaw
-  (https://github.com/mthelpme/rabbit-r1-openclaw): the R1 side-button facts (mtk-kpd scancode
+- ClawPTT (https://github.com/mthelpme/clawptt) and related R1 firmware work by mthelpme:
+  the R1 side-button facts (mtk-kpd scancode
   116, BUTTON_1 keylayout remap), the root evdev reader approach for presses that wake the screen,
   and the radio power-saver idea. app/src/main/java/dev/r1ptt/sys/Root.kt is adapted from
-  ClawPTT's Root.kt. Both projects are under the MIT license:
+  ClawPTT's Root.kt. This upstream work is under the MIT license:
 
     MIT License
 
@@ -35,4 +35,4 @@ robotOS builds on work by others.
 - Rabbit Inc.: official developer mode, the WebUSB flash tool, and the stock firmware images.
 - Andy Yan's LineageOS GSI builds, and Magisk by topjohnwu.
 
-Not affiliated with Rabbit Inc., OpenAI, OpenClaw, or Nous Research.
+Not affiliated with Rabbit Inc., OpenAI, or Nous Research.

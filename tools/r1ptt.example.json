@@ -6,11 +6,6 @@
       "model": "gpt-6.1-sol",
       "extraBody": { "reasoning_effort": "low", "verbosity": "low" }
     },
-    "openclaw": {
-      "baseUrl": "http://192.168.1.50:18789/v1",
-      "apiKey": "REPLACE-WITH-GATEWAY-TOKEN",
-      "model": "openclaw/default"
-    },
     "hermes": {
       "baseUrl": "http://192.168.1.50:8642/v1",
       "apiKey": "REPLACE-WITH-API_SERVER_KEY",

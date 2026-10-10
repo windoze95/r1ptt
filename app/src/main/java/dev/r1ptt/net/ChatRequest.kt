@@ -7,10 +7,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Builds the `/chat/completions` request for the active provider. The three backends differ only
+ * Builds the `/chat/completions` request for the active provider. The backends differ only
  * in how the conversation continues:
  * - HISTORY (OpenAI, custom): the last N messages ride along every time.
- * - OPENCLAW_USER: just the new message; `user` maps to a stable OpenClaw session.
  * - HERMES_SESSION: just the new message; `X-Hermes-Session-Id` continues the Hermes transcript.
  */
 object ChatRequest {
@@ -28,7 +27,7 @@ object ChatRequest {
 
         val context = when (p.session) {
             SessionMode.HISTORY -> messages.takeLast(cfg.historyMessages.coerceAtLeast(1))
-            else -> listOfNotNull(messages.lastOrNull { it.role == Msg.USER })
+            SessionMode.HERMES_SESSION -> listOfNotNull(messages.lastOrNull { it.role == Msg.USER })
         }
         val msgs = JSONArray()
         if (cfg.systemPrompt.isNotBlank()) msgs.put(message("system", cfg.systemPrompt))
@@ -38,7 +37,6 @@ object ChatRequest {
             .put("model", p.model)
             .put("stream", true)
             .put("messages", msgs)
-        if (p.session == SessionMode.OPENCLAW_USER) body.put("user", session)
         mergeExtra(body, p.extraBody)
 
         return Built(p.baseUrl.trimEnd('/') + "/chat/completions", headers, body, p.timeoutSec)

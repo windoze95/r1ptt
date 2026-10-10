@@ -18,11 +18,12 @@ mkdir -p "$OUT"
 # Merge the example's defaults under the real config, like the app does.
 DEFAULTS='{"activeProvider":"openai",
   "providers":{"openai":{"baseUrl":"https://api.openai.com/v1","model":"gpt-6.1-sol","session":"history"},
-               "openclaw":{"model":"openclaw/default","session":"openclaw-user"},
                "hermes":{"model":"hermes-agent","session":"hermes-session"}},
   "stt":{"baseUrl":"https://api.openai.com/v1","model":"gpt-transcribe"},
   "tts":{"baseUrl":"https://api.openai.com/v1","model":"gpt-4o-mini-tts-2025-12-15","voice":"marin","enabled":true}}'
-C=$(jq -s '.[0] * .[1]' <(echo "$DEFAULTS") "$CFG")
+# Ignore a retired profile in memory only; never rewrite the owner's config or credentials.
+C=$(jq -s '.[0] * .[1] | .providers |= del(.openclaw) |
+  if .activeProvider == "openclaw" then .activeProvider = "openai" else . end' <(echo "$DEFAULTS") "$CFG")
 cfg() { jq -r "$1 // empty" <<<"$C"; }
 
 host() { sed -E 's#^[a-z]+://([^/:]+).*#\1#' <<<"$1"; }
@@ -57,7 +58,6 @@ chat() { # chat <provider id> <session id> <messages json> → prints streamed t
   session=$(cfg ".providers.$id.session")
   body=$(jq -n --arg m "$model" --argjson msgs "$msgs" --argjson extra "$(cfg ".providers.$id.extraBody" | grep . || echo '{}')" \
     '{model:$m, stream:true, messages:$msgs} * $extra')
-  [ "$session" = openclaw-user ] && body=$(jq --arg u "r1ptt-$sid" '. + {user:$u}' <<<"$body")
   local hdr=()
   [ "$session" = hermes-session ] && hdr=(-H "X-Hermes-Session-Id: r1ptt-$sid")
   curl -sSN --fail-with-body "$url/chat/completions" -H "Authorization: Bearer $key" -H 'Content-Type: application/json' \

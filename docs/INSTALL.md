@@ -15,7 +15,7 @@ This takes about an hour of hands-on time once Rabbit has approved developer mod
   - `uv` (for `tools/fastboot-entry.py`)
   - Google Chrome (for Rabbit's flash tool)
 - A USB-C data cable.
-- An OpenAI API key, or an OpenClaw or Hermes server (see `server/`).
+- An OpenAI API key, or a Hermes server (see `server/`).
 - Downloads, all saved into `firmware/` (git-ignores it):
   - **Stock rabbitOS v0.8.293**: `rabbit_OS_v0.8.293.zip` from
     https://github.com/rabbit-hmi-oss/firmware/releases. Unzip it to `firmware/stock/`.

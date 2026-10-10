@@ -11,7 +11,7 @@ talk; on release, it either sends what you said or types it into the text field:
   (`gpt-live-transcribe`), dimmed until you let go, and nothing is sent, so you can edit first.
   A tap of the button sends it; `gpt-6.1-sol` answers and the reply is read aloud (`gpt-4o-mini-tts`).
 
-The backends are ChatGPT (an OpenAI API key, the default), **OpenClaw**, **Hermes Agent**, or any
+The backends are ChatGPT (an OpenAI API key, the default), **Hermes Agent**, or any
 other OpenAI-compatible server.
 
 robotOS was previously called R1 PTT. Its repository is
@@ -80,8 +80,7 @@ the read-only capture and offline analyzer include synthetic fixtures, not hardw
 2. **Follow [docs/INSTALL.md](docs/INSTALL.md):** unlock (Rabbit's developer mode) → stock baseline →
    LineageOS GSI → Magisk → `tools/provision.sh --config tools/r1ptt.json`.
 
-For other backends, see [server/openclaw.md](server/openclaw.md),
-[server/hermes.md](server/hermes.md), and [server/speaches.md](server/speaches.md) for
+For other backends, see [server/hermes.md](server/hermes.md), and [server/speaches.md](server/speaches.md) for
 self-hosted speech.
 
 ## Repo layout
@@ -90,7 +89,7 @@ self-hosted speech.
 app/                    the Android app (Kotlin, no AndroidX; OkHttp + coroutines)
 magisk/r1ptt-system/    Magisk module: keylayout + boot-time power settings
 tools/                  build, smoke-test, flash, provision, battery-report scripts
-server/                 backend setup notes (OpenClaw, Hermes, Speaches)
+server/                 backend setup notes (Hermes, Speaches)
 docs/                   install guide, battery notes
 ```
 

@@ -1,4 +1,4 @@
 # r1ptt: the R1's scroll wheel (och1970_holl_key) is volume, everywhere. Stock it's KEY_UP / KEY_DOWN
-# (scancodes 103 / 108), which Generic.kl turns into DPAD_UP / DOWN. (Remap idea from rabbit-r1-openclaw.)
+# (scancodes 103 / 108), which Generic.kl turns into DPAD_UP / DOWN. See NOTICE for upstream credits.
 key 103   VOLUME_UP
 key 108   VOLUME_DOWN

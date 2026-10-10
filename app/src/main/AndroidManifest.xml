@@ -25,7 +25,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.R1"
         android:usesCleartextTraffic="true">
-        <!-- Cleartext is for self-hosted OpenClaw/Hermes on a LAN or tailnet (http://host:port). -->
+        <!-- Cleartext is for self-hosted Hermes/custom backends on a LAN or tailnet (http://host:port). -->
 
         <activity
             android:name=".HomeActivity"

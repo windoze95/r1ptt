@@ -1,7 +1,7 @@
 # Self-hosted speech (optional)
 
 By default the R1 uses OpenAI for speech-to-text and text-to-speech. To keep audio on your own
-hardware, or to use OpenClaw or Hermes without an OpenAI key, run
+hardware, or to use Hermes without an OpenAI key, run
 [Speaches](https://speaches.ai). It is an OpenAI-compatible server that does speech-to-text with
 faster-whisper and text-to-speech with Kokoro. A machine with an NVIDIA GPU makes it fast; on a
 CPU, short clips are still fine.
