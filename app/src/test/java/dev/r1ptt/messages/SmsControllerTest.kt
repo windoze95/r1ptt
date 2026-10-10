@@ -125,4 +125,29 @@ class SmsControllerTest {
         assertEquals(Manifest.permission.BROADCAST_SMS, pm.getReceiverInfo(ComponentName(app, SmsIncomingReceiver::class.java), 0).permission)
         assertFalse(pm.getActivityInfo(ComponentName(app, MessagesActivity::class.java), 0).exported)
     }
+    @Test fun sentCallbackKeepsOriginalResultAndRadioErrorAcrossDuplicates() {
+        val review = review(); send(review)
+        val id = SmsCallback(review.record.id, review.record.token, 0, false)
+        fun result(code: Int, radio: Int) {
+            val done = CountDownLatch(1)
+            controller.result(Intent().setData(Uri.parse(id.uri())).putExtra("errorCode", radio), code) { done.countDown() }
+            assertTrue(done.await(5, TimeUnit.SECONDS))
+        }
+        result(android.telephony.SmsManager.RESULT_NO_DEFAULT_SMS_APP, 42)
+        result(android.telephony.SmsManager.RESULT_ERROR_GENERIC_FAILURE, 99)
+        val part = status(review).parts[0]
+        assertEquals(android.telephony.SmsManager.RESULT_NO_DEFAULT_SMS_APP, part.error)
+        assertEquals(42, part.radioError); assertEquals("Android callback", part.failureSource)
+        assertEquals(1, transport.records.size)
+    }
+
+    @Test fun localSecurityExceptionIsIdentifiedSeparatelyFromCarrierCallbacks() {
+        transport.fault = SecurityException("Sensitive exception text must not be saved")
+        val review = review(); assertTrue(send(review).first)
+        val record = status(review)
+        assertEquals(SmsStatus.FAILED, record.status(System.currentTimeMillis()))
+        assertTrue(record.parts.all { it.failureSource == "SecurityException before handoff" })
+        assertFalse(record.encode().contains("Sensitive exception"))
+        assertEquals(1, transport.records.size)
+    }
 }

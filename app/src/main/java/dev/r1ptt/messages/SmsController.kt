@@ -30,7 +30,8 @@ class SmsReview internal constructor(
     val texts: List<String>,
     val simLabel: String,
 )
-data class MessagesSnapshot(val draft: SmsDraft, val threads: List<SmsThread>, val messages: List<SmsRecord>)
+data class MessagesSnapshot(val draft: SmsDraft, val threads: List<SmsThread>, val messages: List<SmsRecord>,
+    val mmsNotices: Int = 0, val replyRequests: List<Pair<String, SmsDraft>> = emptyList())
 
 /** No network client, AI History, automatic retries, polling service, or radio-idle override. */
 class SmsController(
@@ -39,6 +40,7 @@ class SmsController(
     private val cellularEnabled: () -> Boolean = { app.store.value.power.cellular },
 ) {
     private val db = SmsStore(app)
+    private val systemStore = SmsSystemStore(app, db)
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val prefs = app.getSharedPreferences("messages", 0)
@@ -53,12 +55,13 @@ class SmsController(
     fun permitted(permission: String) = app.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
     val canSend: Boolean get() = supported && permitted(Manifest.permission.SEND_SMS)
     var receiveEnabled: Boolean
-        get() = prefs.getBoolean("receive", false)
+        get() = SmsRole.held(app) || prefs.getBoolean("receive", false)
         set(value) { prefs.edit().putBoolean("receive", value).apply() }
 
     fun load(peer: String?, done: (MessagesSnapshot?, String?) -> Unit) = worker.execute {
         try {
-            val snapshot = MessagesSnapshot(db.draft(), db.threads(), if (peer == null) emptyList() else db.conversation(peer))
+            if (SmsRole.held(app)) db.pendingSystemCopies().forEach(::syncSystem)
+            val snapshot = MessagesSnapshot(db.draft(), db.threads(), if (peer == null) emptyList() else db.conversation(peer), db.mmsNoticeCount(), db.replyRequests())
             if (peer != null) db.markRead(peer)
             main.post { done(snapshot, null) }
         } catch (_: Exception) { main.post { done(null, "Messages could not be opened. Your stored data has been kept.") } }
@@ -81,6 +84,37 @@ class SmsController(
     fun removeRecipient(id: Long, done: () -> Unit) = worker.execute {
         runCatching { db.removeRecipient(id) }
         main.post { done() }
+    }
+
+    fun diagnostics(record: SmsRecord? = null): String = listOfNotNull(record?.let(SmsDiagnostics::attempt),
+        "Current device state (may differ from the attempt):\n${SmsDiagnostics.current(app, cellularEnabled())}").joinToString("\n\n")
+
+    fun queueReply(draft: SmsDraft?, done: () -> Unit) = worker.execute {
+        try {
+            if (draft == null || draft.body.isBlank()) notifyPrivate("Call reply was not sent. Open Messages to write a one-recipient SMS.")
+            else {
+                db.addReplyRequest(java.util.UUID.randomUUID().toString(), draft)
+                changed(); notifyPrivate("A call reply needs review in Messages. Nothing has been sent.")
+            }
+        } catch (_: Exception) { notifyPrivate("The call reply could not be saved. Nothing was sent.") }
+        finally { main.post(done) }
+    }
+    fun removeReplyRequest(id: String) = worker.execute { runCatching { db.removeReplyRequest(id); changed() } }
+
+    fun receiveMmsNotice(intent: Intent, done: () -> Unit) = worker.execute {
+        try {
+            val data = intent.getByteArrayExtra("data") ?: throw IllegalArgumentException()
+            val headers = intent.getByteArrayExtra("header")
+            val sub = intent.getIntExtra(SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX, intent.getIntExtra("subscription", -1))
+            val hash = MessageDigest.getInstance("SHA-256").apply { update("$sub:".toByteArray()); headers?.let(::update) }.digest(data)
+                .joinToString("") { "%02x".format(it) }
+            if (db.saveMmsNotice(hash, sub, headers, data)) { changed(); notifyPrivate("An MMS arrived. robotOS cannot download MMS. Open Messages for details.") }
+        } catch (_: Exception) { notifyPrivate("An unsupported MMS arrived and its notice could not be saved. Use an MMS-capable app and ask the sender to resend.") }
+        finally { done() }
+    }
+
+    private fun syncSystem(record: SmsRecord) {
+        runCatching { systemStore.sync(record) }.onFailure { notifyPrivate("A text is saved in robotOS, but its system SMS copy could not be updated.") }
     }
 
     /** Preparation is local. The only transport call is in send(), after the review button. */
@@ -118,9 +152,11 @@ class SmsController(
             try {
                 check(canSend && !app.updates.installing && cellularEnabled())
                 check(SubscriptionManager.getDefaultSmsSubscriptionId() == review.record.subscriptionId)
-                val record = review.record.copy(createdAt = System.currentTimeMillis())
+                val record = review.record.copy(createdAt = System.currentTimeMillis(), systemOwned = SmsRole.held(app),
+                    sendEvidence = SmsDiagnostics.current(app, cellularEnabled()))
                 db.outgoing(record, review.draft)
                 persisted = true
+                syncSystem(record)
                 pending.entries.removeAll { it.value <= SystemClock.elapsedRealtime() }
                 pending[record.id] = SystemClock.elapsedRealtime() + SmsRecord.SEND_WAIT_MS
                 pendingUntil = pending.values.maxOrNull() ?: 0L
@@ -130,10 +166,10 @@ class SmsController(
                 changed()
                 main.post { done(true, "Sending…") }
             } catch (_: SecurityException) {
-                if (persisted) runCatching { failBeforeSend(review.record, SmsManager.RESULT_ERROR_GENERIC_FAILURE) }
+                if (persisted) runCatching { failBeforeSend(review.record, "SecurityException before handoff") }
                 main.post { done(persisted, "Android did not allow this text. Check SMS access; it was not retried.") }
             } catch (_: IllegalArgumentException) {
-                if (persisted) runCatching { failBeforeSend(review.record, SmsManager.RESULT_ERROR_GENERIC_FAILURE) }
+                if (persisted) runCatching { failBeforeSend(review.record, "IllegalArgumentException before handoff") }
                 main.post { done(persisted, "Android rejected this text. It was not retried.") }
             } catch (_: Exception) {
                 // A binder/transport exception after persistence may have happened after handoff.
@@ -144,8 +180,9 @@ class SmsController(
         }
     }
 
-    private fun failBeforeSend(record: SmsRecord, error: Int) {
-        record.parts.indices.forEach { part -> db.update(SmsCallback(record.id, record.token, part, false)) { it.sent(part, false, error) } }
+    private fun failBeforeSend(record: SmsRecord, source: String) {
+        record.parts.indices.forEach { part -> db.update(SmsCallback(record.id, record.token, part, false)) { it.sent(part, false, SmsManager.RESULT_ERROR_GENERIC_FAILURE, source = source) } }
+        db.record(record.id)?.let(::syncSystem)
         pending.remove(record.id)
         pendingUntil = pending.values.maxOrNull() ?: 0L
         changed()
@@ -154,9 +191,9 @@ class SmsController(
     private fun callback(record: SmsRecord, part: Int, delivery: Boolean): PendingIntent {
         val id = SmsCallback(record.id, record.token, part, delivery)
         val intent = Intent(app, SmsStatusReceiver::class.java).setData(Uri.parse(id.uri()))
-        // Delivery needs the system-supplied PDU. The component and complete identity are explicit.
-        val mutability = if (delivery) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
-        return PendingIntent.getBroadcast(app, 0, intent, mutability or PendingIntent.FLAG_UPDATE_CURRENT)
+        // Android fills sent errorCode and delivery PDU extras. Both need mutability; component,
+        // URI capability, and receiver remain explicit and non-exported. Never accept fill-in identity.
+        return PendingIntent.getBroadcast(app, 0, intent, PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
     fun result(intent: Intent, resultCode: Int, finished: () -> Unit) = worker.execute {
@@ -164,7 +201,8 @@ class SmsController(
             val callback = SmsCallback.parse(intent.dataString) ?: return@execute
             var terminal = false
             val updated = db.update(callback) { record ->
-                val next = if (!callback.delivery) record.sent(callback.part, resultCode == Activity.RESULT_OK, resultCode)
+                val radioError = if (intent.hasExtra("errorCode")) intent.getIntExtra("errorCode", 0) else null
+                val next = if (!callback.delivery) record.sent(callback.part, resultCode == Activity.RESULT_OK, resultCode, radioError)
                 else record.delivered(callback.part, delivery(intent, resultCode))
                 terminal = next.parts.none { it.sent == SentPart.WAITING }
                 next
@@ -173,7 +211,7 @@ class SmsController(
                 pending.remove(callback.id)
                 pendingUntil = pending.values.maxOrNull() ?: 0L
             }
-            if (updated) changed()
+            if (updated) { db.record(callback.id)?.let(::syncSystem); changed() }
         } catch (_: Exception) { notifyPrivate("A text status could not be saved. Check Messages before retrying.") }
         finally { finished() }
     }
@@ -201,7 +239,10 @@ class SmsController(
             hash.update("$sub:".toByteArray())
             messages.forEach { hash.update(it.pdu) }
             val id = hash.digest().joinToString("") { "%02x".format(it) }
-            if (db.insert(SmsRecord(id, peer, body, System.currentTimeMillis(), sub, true))) {
+            val record = SmsRecord(id, peer, body, System.currentTimeMillis(), sub, true,
+                systemOwned = intent.action == Telephony.Sms.Intents.SMS_DELIVER_ACTION && SmsRole.held(app))
+            if (db.insert(record)) {
+                syncSystem(record)
                 changed()
                 notifyPrivate("New text in Messages")
             }

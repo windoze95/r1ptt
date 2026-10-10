@@ -12,12 +12,14 @@ object SmsAddress {
     }
 }
 
-enum class SentPart { WAITING, SENT, FAILED }
+enum class SentPart { WAITING, SENT, FAILED, UNKNOWN }
 enum class DeliveryPart { UNKNOWN, PENDING, DELIVERED, FAILED }
 data class SmsPart(
     val sent: SentPart = SentPart.WAITING,
     val delivery: DeliveryPart = DeliveryPart.UNKNOWN,
     val error: Int? = null,
+    val radioError: Int? = null,
+    val failureSource: String? = null,
 )
 
 enum class SmsStatus { RECEIVED, SENDING, SENT, DELIVERED, FAILED, PARTLY_SENT, UNKNOWN, DELIVERY_FAILED }
@@ -31,10 +33,15 @@ data class SmsRecord(
     val incoming: Boolean,
     val token: String = "",
     val parts: List<SmsPart> = emptyList(),
+    val systemOwned: Boolean = false,
+    val sendEvidence: String? = null,
 ) {
     fun status(now: Long): SmsStatus {
         if (incoming) return SmsStatus.RECEIVED
         if (parts.all { it.delivery == DeliveryPart.DELIVERED }) return SmsStatus.DELIVERED
+        // v0.3.0 read the callback result after goAsync(), persisting 0 instead of Android's result.
+        // Keep that evidence intact and label it unknown, never as proof that the text failed.
+        if (parts.any { it.sent == SentPart.UNKNOWN || (it.sent == SentPart.FAILED && it.error == 0 && it.failureSource == null) }) return SmsStatus.UNKNOWN
         val sent = parts.count { it.sent == SentPart.SENT }
         val failed = parts.count { it.sent == SentPart.FAILED }
         val waiting = parts.size - sent - failed
@@ -45,17 +52,18 @@ data class SmsRecord(
         return SmsStatus.SENT
     }
 
-    fun sent(index: Int, success: Boolean, error: Int): SmsRecord = change(index) { part ->
+    fun sent(index: Int, success: Boolean, error: Int, radioError: Int? = null, source: String = "Android callback"): SmsRecord = change(index) { part ->
         // A positive delivery report can arrive first. Replayed or conflicting sent callbacks
         // cannot downgrade it, nor change a terminal sent result.
         if (part.sent != SentPart.WAITING) part
-        else part.copy(sent = if (success) SentPart.SENT else SentPart.FAILED, error = if (success) null else error)
+        else part.copy(sent = if (success) SentPart.SENT else if (error == 0) SentPart.UNKNOWN else SentPart.FAILED, error = if (success) null else error,
+            radioError = if (success) null else radioError, failureSource = if (success) null else source)
     }
 
     fun delivered(index: Int, result: DeliveryPart): SmsRecord = change(index) { part ->
         when {
             part.delivery == DeliveryPart.DELIVERED || result == DeliveryPart.UNKNOWN -> part
-            result == DeliveryPart.DELIVERED -> part.copy(sent = SentPart.SENT, delivery = result, error = null)
+            result == DeliveryPart.DELIVERED -> part.copy(sent = SentPart.SENT, delivery = result, error = null, radioError = null, failureSource = null)
             part.delivery == DeliveryPart.FAILED -> part
             else -> part.copy(delivery = result)
         }
@@ -68,8 +76,9 @@ data class SmsRecord(
 
     fun encode(): String = JSONObject().put("id", id).put("peer", peer).put("body", body)
         .put("createdAt", createdAt).put("subscriptionId", subscriptionId).put("incoming", incoming)
-        .put("token", token).put("parts", JSONArray().also { array -> parts.forEach { p ->
-            array.put(JSONObject().put("sent", p.sent.name).put("delivery", p.delivery.name).put("error", p.error))
+        .put("token", token).put("systemOwned", systemOwned).put("sendEvidence", sendEvidence).put("parts", JSONArray().also { array -> parts.forEach { p ->
+            array.put(JSONObject().put("sent", p.sent.name).put("delivery", p.delivery.name).put("error", p.error)
+                .put("radioError", p.radioError).put("failureSource", p.failureSource))
         } }).toString()
 
     companion object {
@@ -91,8 +100,11 @@ data class SmsRecord(
                 j.getLong("createdAt"), j.getInt("subscriptionId"), j.getBoolean("incoming"),
                 j.getString("token"), List(array.length()) { i -> array.getJSONObject(i).let { p ->
                     SmsPart(SentPart.valueOf(p.getString("sent")), DeliveryPart.valueOf(p.getString("delivery")),
-                        if (p.has("error") && !p.isNull("error")) p.getInt("error") else null)
-                } })
+                        if (p.has("error") && !p.isNull("error")) p.getInt("error") else null,
+                        if (p.has("radioError") && !p.isNull("radioError")) p.getInt("radioError") else null,
+                        if (p.has("failureSource") && !p.isNull("failureSource")) p.getString("failureSource") else null)
+                } }, j.optBoolean("systemOwned", false),
+                if (j.has("sendEvidence") && !j.isNull("sendEvidence")) j.getString("sendEvidence") else null)
             require(record.incoming || record.parts.size in 1..MAX_PARTS)
             return record
         }

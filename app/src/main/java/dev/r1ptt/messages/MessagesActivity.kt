@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.text.Editable
 import android.text.InputFilter
 import android.text.InputType
@@ -70,6 +71,10 @@ class MessagesActivity : Activity(), DictationTarget {
     private var rows = emptyList<SmsRecord>()
     private var threads = emptyList<SmsThread>()
     private var pendingCompose: SmsComposeAction? = null
+    private var pendingExternal: SmsDraft? = null
+    private var pendingNotice: String? = null
+    private var mmsNotices = 0
+    private var replyRequests = emptyList<Pair<String, SmsDraft>>()
     private val main = Handler(Looper.getMainLooper())
     private val save = Runnable { persistDraft() }
     private val provisional by lazy { ForegroundColorSpan(getColor(R.color.dim)) }
@@ -79,6 +84,11 @@ class MessagesActivity : Activity(), DictationTarget {
         val name = intent.getStringExtra(SmsAssistant.RECIPIENT).orEmpty()
         val text = intent.getStringExtra(SmsAssistant.BODY).orEmpty()
         if (name.isNotBlank() && name.length <= 80 && text.isNotBlank() && text.length <= SmsRecord.MAX_DRAFT_CHARS) pendingCompose = SmsComposeAction(name, text)
+        val externalPeer = intent.getStringExtra(SmsExternalDraft.PEER)
+        val externalBody = intent.getStringExtra(SmsExternalDraft.BODY).orEmpty()
+        if (externalPeer != null && SmsAddress.normalize(externalPeer) == externalPeer && externalBody.length <= SmsRecord.MAX_DRAFT_CHARS)
+            pendingExternal = SmsDraft(externalPeer, externalBody)
+        pendingNotice = intent.getStringExtra(SmsExternalDraft.NOTICE)?.take(300)
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(10), dp(4), dp(10), dp(6))
@@ -212,8 +222,11 @@ class MessagesActivity : Activity(), DictationTarget {
             val rebuild = !loaded || reloadDraft
             if (rebuild && !sending && draftRevision == draftAtLoad) draft = snapshot.draft
             loaded = true; rows = snapshot.messages; threads = snapshot.threads
+            mmsNotices = snapshot.mmsNotices; replyRequests = snapshot.replyRequests
             if (rebuild) renderScreen() else renderRows()
             pendingCompose?.let { action -> pendingCompose = null; resolveAction(action) }
+            pendingExternal?.let { next -> pendingExternal = null; replaceDraft(next) }
+            pendingNotice?.let { notice -> pendingNotice = null; showDialog(AlertDialog.Builder(this).setTitle("SMS only").setMessage(notice).setPositiveButton("OK", null)) }
             if (screen == Screen.CONVERSATION) getSystemService(NotificationManager::class.java).cancel(SmsController.NOTIFICATION)
         }
     }
@@ -223,6 +236,10 @@ class MessagesActivity : Activity(), DictationTarget {
         container.removeAllViews()
         when (screen) {
             Screen.THREADS -> {
+                if (mmsNotices > 0) container.addView(label("$mmsNotices MMS notice(s) saved on this device. robotOS cannot download pictures or group MMS. Choose an MMS-capable default app in Android settings and ask the sender to resend; the notice is not an imported MMS.", 14f))
+                replyRequests.forEach { (id, requested) -> container.addView(button("Review call reply · ${requested.peer}") {
+                    replaceDraft(requested) { sms.removeReplyRequest(id) }
+                }) }
                 if (threads.isEmpty()) container.addView(label("Your texts will appear here.\n\nSMS only · one recipient at a time. Pictures, group MMS, RCS, and old inbox import are not included.", 15f))
                 threads.forEach { thread ->
                     container.addView(button("${if (thread.unread) "● " else ""}${thread.peer}\n${thread.last.body.take(70)}") { navigate(Screen.CONVERSATION, thread.peer) }.apply { gravity = Gravity.START; maxLines = 3 })
@@ -246,6 +263,7 @@ class MessagesActivity : Activity(), DictationTarget {
                             .setPositiveButton("Create draft") { _, _ -> replaceDraft(SmsDraft(record.peer, record.body)) }
                             .setNegativeButton("Cancel", null))
                     })
+                    if (!record.incoming) container.addView(button("Message details") { details(record) })
                 }
             }
             Screen.COMPOSE -> container.addView(label(
@@ -275,13 +293,13 @@ class MessagesActivity : Activity(), DictationTarget {
         }
     }
 
-    private fun replaceDraft(next: SmsDraft) {
+    private fun replaceDraft(next: SmsDraft, accepted: () -> Unit = {}) {
         if (draft.body.isNotBlank() && draft != next) {
             showDialog(AlertDialog.Builder(this).setTitle("Replace the current draft?")
                 .setMessage("You have an unfinished text. Replacing it discards that draft.")
-                .setPositiveButton("Replace draft") { _, _ -> draft = next; navigate(Screen.COMPOSE) }
+                .setPositiveButton("Replace draft") { _, _ -> draft = next; navigate(Screen.COMPOSE); accepted() }
                 .setNegativeButton("Keep draft", null))
-        } else { draft = next; navigate(Screen.COMPOSE) }
+        } else { draft = next; navigate(Screen.COMPOSE); accepted() }
     }
 
     private fun draftChanged() {
@@ -372,22 +390,44 @@ class MessagesActivity : Activity(), DictationTarget {
         app.turns.cancelDictation(this)
         val options = arrayOf(
             if (sms.canSend) "SMS sending is enabled" else "Enable SMS sending",
-            if (sms.receiveEnabled) "Turn off incoming texts" else "Enable incoming texts",
+            if (SmsRole.held(this)) "Default SMS app · incoming enabled" else if (sms.receiveEnabled) "Turn off incoming texts" else "Enable incoming texts",
             if (dictationConsent == consentKey()) "Turn off dictation" else "Enable dictation for this visit",
             if (app.smsAssistant.enabled) "Turn off assistant SMS drafts" else "Enable assistant SMS drafts",
             "Saved recipients",
             "robotOS settings",
+            if (SmsRole.held(this)) "robotOS is the default SMS app" else "Make robotOS the default SMS app",
+            "SMS diagnostics",
         )
         showDialog(AlertDialog.Builder(this).setTitle("Messages options").setItems(options) { _, which ->
             when (which) {
                 0 -> if (!sms.canSend) enableSend()
-                1 -> if (sms.receiveEnabled) { sms.receiveEnabled = false; status.text = idleHint() } else enableReceive()
+                1 -> if (SmsRole.held(this)) defaultSmsInfo() else if (sms.receiveEnabled) { sms.receiveEnabled = false; status.text = idleHint() } else enableReceive()
                 2 -> if (dictationConsent == consentKey()) { dictationConsent = null; status.text = idleHint() } else enableDictation()
                 3 -> if (app.smsAssistant.enabled) { app.smsAssistant.enabled = false; app.turns.refreshVoiceContext() } else enableAssistant()
                 4 -> savedRecipients()
                 5 -> startActivity(Intent(this, SettingsActivity::class.java))
+                6 -> defaultSmsInfo()
+                7 -> details(null)
             }
         })
+    }
+
+    private fun details(record: SmsRecord?) {
+        val scroll = ScrollView(this).apply { addView(label(sms.diagnostics(record), 14f).apply { setPadding(dp(18), dp(8), dp(18), dp(8)); setTextIsSelectable(true) }) }
+        showDialog(AlertDialog.Builder(this).setTitle(if (record == null) "SMS diagnostics" else "Message details").setView(scroll).setPositiveButton("Close", null))
+    }
+
+    private fun defaultSmsInfo() {
+        if (SmsRole.held(this)) {
+            showDialog(AlertDialog.Builder(this).setTitle("Default SMS app")
+                .setMessage("robotOS is the default SMS app. Incoming SMS is saved even when the companion option was off. To stop handling incoming SMS, choose another default app in Android settings. MMS downloads and group MMS are not supported.")
+                .setPositiveButton("Android settings") { _, _ -> startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) }
+                .setNegativeButton("Close", null))
+        } else if (!SmsRole.available(this)) status.setText(R.string.sms_role_unavailable)
+        else showDialog(AlertDialog.Builder(this).setTitle("Use robotOS as the default SMS app?")
+            .setMessage("robotOS will handle new SMS and keep a copy in Android’s SMS storage. Existing inboxes are not imported. Android grants the SMS access required for this role.\n\nSMS only: pictures and group MMS cannot be downloaded. An incoming MMS notice is saved locally and shown as unsupported; switching apps may require asking the sender to resend. Call quick replies are drafts requiring review in Messages.\n\nThe modem keeps its existing sleep schedule.")
+            .setPositiveButton("Choose default app") { _, _ -> startActivityForResult(SmsRole.request(this), SMS_ROLE) }
+            .setNegativeButton("Cancel", null))
     }
 
     private fun enableSend() {
@@ -529,5 +569,5 @@ class MessagesActivity : Activity(), DictationTarget {
     }) }
 
     private enum class Screen { THREADS, CONVERSATION, COMPOSE }
-    companion object { private const val SEND_PERMISSION = 20; private const val RECEIVE_PERMISSION = 21; private const val MIC_PERMISSION = 22 }
+    companion object { private const val SEND_PERMISSION = 20; private const val RECEIVE_PERMISSION = 21; private const val MIC_PERMISSION = 22; private const val SMS_ROLE = 23 }
 }

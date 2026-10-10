@@ -19,6 +19,9 @@
     <!-- Optional Messages access: requested only from the explicit Messages controls. -->
     <uses-permission android:name="android.permission.SEND_SMS" />
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <!-- Needed only for the default handler's exact app-owned provider-copy recovery. No inbox import. -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_MMS" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <uses-feature android:name="android.hardware.telephony.messaging" android:required="false" />
 
@@ -71,7 +74,33 @@
         <receiver android:name=".messages.SmsIncomingReceiver" android:exported="true"
             android:permission="android.permission.BROADCAST_SMS">
             <intent-filter><action android:name="android.provider.Telephony.SMS_RECEIVED" /></intent-filter>
+            <intent-filter><action android:name="android.provider.Telephony.SMS_DELIVER" /></intent-filter>
         </receiver>
+        <receiver android:name=".messages.MmsNoticeReceiver" android:exported="true"
+            android:permission="android.permission.BROADCAST_WAP_PUSH">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.WAP_PUSH_DELIVER" />
+                <data android:mimeType="application/vnd.wap.mms-message" />
+            </intent-filter>
+        </receiver>
+        <activity android:name=".messages.SmsComposeActivity" android:exported="true" android:label="@string/messages">
+            <intent-filter>
+                <action android:name="android.intent.action.SENDTO" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="sms" /><data android:scheme="smsto" />
+                <data android:scheme="mms" /><data android:scheme="mmsto" />
+            </intent-filter>
+        </activity>
+        <service android:name=".messages.SmsRespondService" android:exported="true"
+            android:permission="android.permission.SEND_RESPOND_VIA_MESSAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.RESPOND_VIA_MESSAGE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="sms" /><data android:scheme="smsto" />
+                <data android:scheme="mms" /><data android:scheme="mmsto" />
+            </intent-filter>
+        </service>
 
         <!-- Settings/API-key import over adb; only senders holding DUMP (adb shell, root) can reach it. -->
         <receiver
