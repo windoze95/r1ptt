@@ -23,6 +23,7 @@ object SmsExternalDraft {
     const val NOTICE = "sms.external.notice"
     fun parse(intent: Intent): SmsDraft? {
         if (intent.action !in setOf(Intent.ACTION_SENDTO, android.telephony.TelephonyManager.ACTION_RESPOND_VIA_MESSAGE)) return null
+        if (intent.hasExtra(Intent.EXTRA_STREAM) || intent.clipData != null) return null
         val uri = intent.data ?: return null
         if (uri.scheme !in setOf("sms", "smsto")) return null
         // Reject groups, fragments, dial strings, and multiple query values. A URI is untrusted input.
@@ -30,7 +31,9 @@ object SmsExternalDraft {
         val encoded = uri.encodedSchemeSpecificPart
         val raw = android.net.Uri.decode(encoded.substringBefore('?'))
         val peer = SmsAddress.normalize(raw) ?: return null
-        val bodyValues = encoded.substringAfter('?', "").split('&').filter { it.startsWith("body=") }
+        val query = encoded.substringAfter('?', "")
+        val bodyValues = if (query.isEmpty()) emptyList() else query.split('&')
+        if (bodyValues.any { !it.startsWith("body=") }) return null
         if (bodyValues.size > 1) return null
         val body = intent.getStringExtra("sms_body") ?: intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
             ?: bodyValues.singleOrNull()

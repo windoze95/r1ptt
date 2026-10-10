@@ -46,6 +46,9 @@ class SmsRoleTest {
             assertNull(uri, SmsExternalDraft.parse(Intent(Intent.ACTION_SENDTO, Uri.parse(uri))))
         assertNull(SmsExternalDraft.parse(Intent(Intent.ACTION_VIEW, Uri.parse("sms:+15551234567"))))
         assertNull(SmsExternalDraft.parse(Intent(Intent.ACTION_SENDTO, Uri.parse("sms:+15551234567")).putExtra("sms_body", "x".repeat(1601))))
+        assertNull(SmsExternalDraft.parse(Intent(Intent.ACTION_SENDTO, Uri.parse("sms:+15551234567")).putExtra(Intent.EXTRA_STREAM, Uri.parse("content://example/picture"))))
+        assertNull(SmsExternalDraft.parse(Intent(Intent.ACTION_SENDTO, Uri.parse("sms:+15551234567?body=one&body=two"))))
+        assertNull(SmsExternalDraft.parse(Intent(Intent.ACTION_SENDTO, Uri.parse("sms:+15551234567?cc=15557654321"))))
     }
 
     @Test fun diagnosticFailureNamesAreActionableWithoutClaimingCarrierEntitlement() {
