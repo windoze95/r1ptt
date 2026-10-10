@@ -71,15 +71,39 @@ class MessagesActivityTest {
         c.pause().stop().destroy()
     }
 
-    @Test fun typedAssistantActionOpensOnlyALocalDraftWithoutAddingAiHistory() {
+    @Test fun typedAssistantActionWithUnknownNameOpensClarificationWithoutAddingAiHistory() {
         app.smsAssistant.enabled = true
         app.turns.sendText("Text Yana that I’m on my way")
-        shadowOf(Looper.getMainLooper()).idle()
+        await { shadowOf(app).peekNextStartedActivity() != null }
         val opened = shadowOf(app).nextStartedActivity
         assertEquals(MessagesActivity::class.java.name, opened.component?.className)
         assertEquals("Yana", opened.getStringExtra(SmsAssistant.RECIPIENT))
         assertEquals("I’m on my way", opened.getStringExtra(SmsAssistant.BODY))
         assertTrue(app.history.messages.isEmpty())
+        SmsStore(app).use { assertTrue(it.threads().isEmpty()) }
+    }
+
+    @Test fun completedTypedCommandReachesSmsPreparationAfterTurnSettles() {
+        app.smsAssistant.enabled = true
+        // No SMS permission: real controller preparation must fail before any transport call.
+        app.turns.sendText("Text +15551234567: Synthetic only")
+        await { app.turns.state.value.note.contains("No text was sent") }
+        assertTrue(app.turns.state.value.note.contains("Enable SMS sending"))
+        assertFalse(app.turns.busy)
+        assertNull(shadowOf(app).nextStartedActivity)
+        assertTrue(app.history.messages.isEmpty())
+        SmsStore(app).use { assertTrue(it.threads().isEmpty()) }
+    }
+
+    @Test fun newPressCancelsTypedCommandWhileRecipientLookupIsPending() {
+        app.smsAssistant.enabled = true
+        app.turns.sendText("Text Yana that Synthetic only")
+        app.turns.onDoubleTap()
+        // Queue a read after lookup so all prior worker callbacks have arrived.
+        var drained = false
+        app.sms.recipients { _, _ -> drained = true }
+        await { drained }
+        assertNull(shadowOf(app).nextStartedActivity)
         SmsStore(app).use { assertTrue(it.threads().isEmpty()) }
     }
 

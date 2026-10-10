@@ -8,7 +8,7 @@
     <string name="sms_enable_sending">Enable SMS sending in Options first.</string>
     <string name="sms_unavailable">SMS is unavailable on this installation. Your draft is kept.</string>
     <string name="sms_unsupported">This Android installation does not offer SMS messaging.</string>
-    <string name="sms_assistant_enabled">Assistant SMS drafts enabled. Add names in Saved recipients.</string>
+    <string name="sms_assistant_enabled">Assistant SMS sending enabled. Explicit commands send without review.</string>
     <string name="sms_recipient_saved">Recipient saved on this device.</string>
     <string name="app_name">robotOS</string>
     <string name="settings">Settings</string>

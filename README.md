@@ -52,8 +52,9 @@ Tap the text field on the touchscreen to bring up the keyboard. The gear icon op
 
 The message icon opens **Messages**, a one-to-one SMS handler. Type a draft, or opt in
 to dictation and assistant commands such as “Text Yana that I’m on my way.” Saved names resolve
-locally; unknown or ambiguous recipients need your input. Every send requires recipient/message
-review and **Send SMS** on the device. Sending, new incoming texts, and assistant drafts each have
+locally; unknown or ambiguous recipients need your input. With **assistant SMS sending** enabled,
+explicit completed commands send directly without review. Manual drafts still use **Review text**
+and **Send SMS**. Sending, new incoming texts, and assistant commands each have
 explicit controls in Messages → Options. No SMS permission is requested merely by opening it. Options can request Android’s default SMS
 role. MMS is explicitly unsupported; incoming MMS notices are retained locally and shown as warnings.
 Message details exposes native failure codes without retrying a failed or uncertain attempt.
