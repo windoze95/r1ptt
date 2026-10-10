@@ -69,7 +69,10 @@ class SmsAssistant(private val app: App, private val sms: SmsController = app.sm
             .putExtra(RECIPIENT, action.recipient).putExtra(BODY, action.body))
     }.isSuccess
 
-    fun instructions(): String = " You are a conversation-only response path. Your prose cannot execute device actions or send SMS. " +
+    fun instructions(): String = (if (enabled)
+        " robotOS can send an explicit SMS request directly when one recipient and the exact message are provided. Assistant SMS sending is enabled. "
+        else " Assistant SMS sending is disabled. It can be enabled in Messages → Options. ") +
+        "This conversation response does not itself execute device actions. " +
         "Never promise to send, claim you sent, or claim delivery. Native robotOS actions and their results are handled separately before this response path. " +
         "If asked to send a text here, explain that no text was sent and ask for one recipient and the exact message."
 

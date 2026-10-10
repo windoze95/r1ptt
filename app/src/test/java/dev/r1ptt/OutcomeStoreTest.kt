@@ -65,4 +65,14 @@ class OutcomeStoreTest {
         assertEquals(OutcomeStatus.SMS_FAILED, store.list().single().status)
         assertEquals(2, store.list().single().code)
     }
+
+    @Test fun requestClarificationAndLocalRecipientFailureRemainDistinctAfterReload() {
+        val request = store.begin(OutcomeSource.VOICE)
+        store.update(request, OutcomeStatus.CLARIFY, OutcomeReason.REQUEST)
+        val recipient = store.begin(OutcomeSource.TYPED)
+        store.update(recipient, OutcomeStatus.CLARIFY, OutcomeReason.RECIPIENT)
+        val reloaded = OutcomeStore(app) { now }.list()
+        assertEquals(listOf(OutcomeReason.REQUEST, OutcomeReason.RECIPIENT), reloaded.map { it.reason })
+        assertTrue(reloaded.all { it.status == OutcomeStatus.CLARIFY })
+    }
 }
