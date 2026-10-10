@@ -2,6 +2,7 @@ package dev.r1ptt.bridge
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import android.os.PowerManager
 import org.robolectric.RuntimeEnvironment
 import dev.r1ptt.data.BridgeConfig
 import dev.r1ptt.data.Config as AppConfig
@@ -196,5 +197,17 @@ class BridgeTest {
             assertFalse(unsafe.holdRadios); assertFalse(unsafe.sync)
         }
         assertFalse(base.copy(docked = false).holdRadios)
+    }
+
+    @Test fun moderateOrHigherHeatPausesSyncAndReleasesDockedRadios() {
+        val base = RelayPower(true, false, true, true, false, false, false, 100, PowerManager.THERMAL_STATUS_LIGHT)
+        assertTrue(base.holdRadios)
+        assertTrue(base.sync)
+        for (level in PowerManager.THERMAL_STATUS_MODERATE..PowerManager.THERMAL_STATUS_SHUTDOWN) {
+            val hot = base.copy(thermalStatus = level)
+            assertFalse(hot.holdRadios)
+            assertFalse(hot.sync)
+            assertFalse(hot.copy(interactive = true).sync)
+        }
     }
 }

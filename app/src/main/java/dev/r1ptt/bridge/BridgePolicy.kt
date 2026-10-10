@@ -1,5 +1,6 @@
 package dev.r1ptt.bridge
 
+import android.os.PowerManager
 import dev.r1ptt.messages.SmsIntent
 import org.json.JSONObject
 import java.security.MessageDigest
@@ -33,7 +34,8 @@ data class RelayPower(
     val interactive: Boolean, val deliberateAirplane: Boolean, val powerSave: Boolean,
     val batteryPercent: Int, val thermalStatus: Int,
 ) {
-    val safe get() = enabled && !paused && !deliberateAirplane && !powerSave && batteryPercent >= 15 && thermalStatus < 3
+    val safe get() = enabled && !paused && !deliberateAirplane && !powerSave && batteryPercent >= 15 &&
+        thermalStatus < PowerManager.THERMAL_STATUS_MODERATE
     val holdRadios get() = safe && docked && plugged
     val sync get() = safe && (interactive || holdRadios)
 }
