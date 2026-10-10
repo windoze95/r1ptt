@@ -7,18 +7,20 @@ import android.database.sqlite.SQLiteOpenHelper
 import android.database.sqlite.SQLiteConstraintException
 
 /** App-private SMS data, separate from AI History. SQLite transactions commit before any send. */
-class SmsStore(context: Context) : SQLiteOpenHelper(context, "messages.db", null, 2) {
+class SmsStore(context: Context) : SQLiteOpenHelper(context, "messages.db", null, 3) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE messages (id TEXT PRIMARY KEY, peer TEXT NOT NULL, created INTEGER NOT NULL, unread INTEGER NOT NULL, record TEXT NOT NULL)")
         db.execSQL("CREATE INDEX messages_peer ON messages(peer, created)")
         db.execSQL("CREATE TABLE draft (id INTEGER PRIMARY KEY CHECK (id = 1), peer TEXT NOT NULL, body TEXT NOT NULL)")
         db.execSQL("CREATE TABLE recipients (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, number TEXT NOT NULL)")
         createRoleTables(db)
+        dev.r1ptt.bridge.BridgeJournal.create(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        check(oldVersion == 1 && newVersion == 2) { "Unsupported Messages database version" }
-        createRoleTables(db) // Additive migration: the original failed attempt and its callbacks stay intact.
+        check(oldVersion in 1..2 && newVersion == 3) { "Unsupported Messages database version" }
+        if (oldVersion == 1) createRoleTables(db)
+        dev.r1ptt.bridge.BridgeJournal.create(db) // Additive: existing drafts and native receipts survive.
     }
 
     private fun createRoleTables(db: SQLiteDatabase) {
@@ -79,10 +81,11 @@ class SmsStore(context: Context) : SQLiteOpenHelper(context, "messages.db", null
     fun addReplyRequest(id: String, draft: SmsDraft) { writableDatabase.insertOrThrow("reply_requests", null, ContentValues().apply { put("id", id); put("peer", draft.peer); put("body", draft.body) }) }
     fun removeReplyRequest(id: String) { writableDatabase.delete("reply_requests", "id=?", arrayOf(id)) }
 
-    fun outgoing(record: SmsRecord, draft: SmsDraft?) {
+    fun outgoing(record: SmsRecord, draft: SmsDraft?, bridgeCommand: String? = null) {
         val db = writableDatabase
         db.beginTransaction()
         try {
+            if (bridgeCommand != null) dev.r1ptt.bridge.BridgeJournal.claim(db, bridgeCommand, record, System.currentTimeMillis() / 1000)
             check(insert(record)) { "This send was already recorded" }
             // The draft may have changed while the review was open; clear only that exact draft.
             if (draft != null) db.delete("draft", "id=1 AND peer=? AND body=?", arrayOf(draft.peer, draft.body))

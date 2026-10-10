@@ -31,6 +31,7 @@ class SmsReview internal constructor(
     val record: SmsRecord,
     val texts: List<String>,
     val simLabel: String,
+    val bridgeCommand: String? = null,
 )
 data class MessagesSnapshot(val draft: SmsDraft, val threads: List<SmsThread>, val messages: List<SmsRecord>,
     val mmsNotices: Int = 0, val replyRequests: List<Pair<String, SmsDraft>> = emptyList())
@@ -139,6 +140,9 @@ class SmsController(
 
     /** Consumes one explicit attempt (review button or assistant command). Never automatically retries. */
     fun send(review: SmsReview, clearDraft: Boolean = true, done: (Boolean, String) -> Unit) {
+        if (review.bridgeCommand != null && !app.bridge.canDispatch(review.bridgeCommand)) {
+            done(false, "Relay sending is paused or the command expired. Nothing was sent."); return
+        }
         if (dispatching || app.updates.installing || app.turns.busy) {
             done(false, "Finish the current action before sending."); return
         }
@@ -154,9 +158,10 @@ class SmsController(
             try {
                 check(canSend && !app.updates.installing && cellularEnabled())
                 check(SubscriptionManager.getDefaultSmsSubscriptionId() == review.record.subscriptionId)
+                if (review.bridgeCommand != null) check(app.bridge.canDispatch(review.bridgeCommand))
                 val record = review.record.copy(createdAt = System.currentTimeMillis(), systemOwned = SmsRole.held(app),
                     sendEvidence = SmsDiagnostics.current(app, cellularEnabled()))
-                db.outgoing(record, review.draft.takeIf { clearDraft })
+                db.outgoing(record, review.draft.takeIf { clearDraft }, review.bridgeCommand)
                 persisted = true
                 syncSystem(record)
                 pending.entries.removeAll { it.value <= SystemClock.elapsedRealtime() }

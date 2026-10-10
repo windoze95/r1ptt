@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
@@ -24,6 +26,10 @@
     <uses-permission android:name="android.permission.RECEIVE_MMS" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <uses-feature android:name="android.hardware.telephony.messaging" android:required="false" />
+    <queries>
+        <package android:name="com.tailscale.ipn" />
+        <package android:name="com.wireguard.android" />
+    </queries>
 
     <application
         android:name=".App"
@@ -62,6 +68,16 @@
             android:name=".PttService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+        <service android:name=".bridge.RelayService" android:exported="false"
+            android:foregroundServiceType="remoteMessaging" />
+        <activity android:name=".bridge.BridgeActivity" android:exported="false" android:label="SMS relay" />
+        <receiver android:name=".bridge.RelayBootReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <activity android:name=".update.UpdateActivity" android:exported="false"
             android:label="@string/updates" />
