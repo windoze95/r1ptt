@@ -2,6 +2,9 @@ package dev.r1ptt.messages
 
 import android.content.Intent
 import dev.r1ptt.App
+import dev.r1ptt.OutcomeSource
+import dev.r1ptt.OutcomeStatus
+import dev.r1ptt.OutcomeReason
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Only completed explicit user commands enter here. No model-output, inbox or Intent send entry. */
@@ -12,28 +15,35 @@ class SmsAssistant(private val app: App, private val sms: SmsController = app.sm
         get() = prefs.getBoolean("assistantSend", false)
         set(value) { prefs.edit().putBoolean("assistantSend", value).apply() }
 
-    class Request internal constructor(val action: SmsComposeAction) {
+    class Request internal constructor(val action: SmsComposeAction, val outcomeId: String) {
         private val consumed = AtomicBoolean()
         internal fun claim() = consumed.compareAndSet(false, true)
     }
 
     fun command(text: String): SmsComposeAction? = if (enabled) SmsComposeAction.parse(text) else null
-    fun request(text: String): Request? = command(text)?.let(::Request)
+    fun request(text: String): Request? = command(text)?.let { request(it, app.outcomes.begin(OutcomeSource.SMS)) }
+    fun request(action: SmsComposeAction, outcomeId: String): Request = Request(action, outcomeId)
 
     /** Main-thread completion only. A stale callback or repeated completion cannot send again. */
     fun execute(request: Request, current: () -> Boolean, report: (String) -> Unit) {
-        if (!request.claim() || !enabled || !current()) return
+        if (!request.claim()) return
+        if (!enabled || !current()) { app.outcomes.finishIfOpen(request.outcomeId, OutcomeStatus.CANCELLED); return }
         val action = request.action
+        fun rejected(message: String, reason: OutcomeReason) {
+            app.outcomes.update(request.outcomeId, OutcomeStatus.FAILED, reason)
+            report(message)
+        }
         sms.recipients { saved, error ->
-            if (!enabled || !current()) return@recipients
-            if (saved == null) { report("${error ?: "Recipients unavailable."} No text was sent."); return@recipients }
+            if (!enabled || !current()) { app.outcomes.finishIfOpen(request.outcomeId, OutcomeStatus.CANCELLED); return@recipients }
+            if (saved == null) { rejected("${error ?: "Recipients unavailable."} No text was sent.", OutcomeReason.UNAVAILABLE); return@recipients }
             when (val recipient = SmsRecipientResolver.resolve(action.recipient, saved)) {
                 is SmsResolution.Number -> {
-                    val prepared = try { sms.prepare(SmsDraft(recipient.number, action.body)) }
-                    catch (e: IllegalArgumentException) { report("${e.message} No text was sent."); return@recipients }
-                    catch (e: IllegalStateException) { report("${e.message} No text was sent."); return@recipients }
-                    catch (_: Exception) { report("SMS is unavailable. No text was sent."); return@recipients }
+                    val prepared = try { sms.prepare(SmsDraft(recipient.number, action.body), request.outcomeId) }
+                    catch (e: IllegalArgumentException) { rejected("${e.message} No text was sent.", OutcomeReason.INVALID_ACTION); return@recipients }
+                    catch (e: IllegalStateException) { rejected("${e.message} No text was sent.", OutcomeReason.UNAVAILABLE); return@recipients }
+                    catch (_: Exception) { rejected("SMS is unavailable. No text was sent.", OutcomeReason.UNAVAILABLE); return@recipients }
                     sms.send(prepared, clearDraft = false) { consumed, message ->
+                        if (!consumed) app.outcomes.update(request.outcomeId, OutcomeStatus.FAILED, OutcomeReason.UNAVAILABLE)
                         if (current()) {
                             report(message)
                             // This Intent only displays the durable attempt; reopening it never sends.
@@ -44,8 +54,11 @@ class SmsAssistant(private val app: App, private val sms: SmsController = app.sm
                         }
                     }
                 }
-                else -> report(if (open(action)) "Recipient needs clarification in Messages. No text was sent."
-                    else "Couldn't open Messages for recipient clarification. No text was sent.")
+                else -> {
+                    app.outcomes.update(request.outcomeId, OutcomeStatus.CLARIFY, OutcomeReason.RECIPIENT)
+                    report(if (open(action)) "Recipient needs clarification in Messages. No text was sent."
+                        else "Couldn't open Messages for recipient clarification. No text was sent.")
+                }
             }
         }
     }
@@ -56,12 +69,9 @@ class SmsAssistant(private val app: App, private val sms: SmsController = app.sm
             .putExtra(RECIPIENT, action.recipient).putExtra(BODY, action.body))
     }.isSuccess
 
-    fun instructions(): String = if (!enabled) "" else
-        " robotOS sends an SMS locally after a completed explicit user command such as 'Text NAME that MESSAGE' or 'Text NUMBER: MESSAGE', without a review step. " +
-            "The device resolves exact saved names; missing or ambiguous recipients need clarification. You cannot read texts or contacts or invoke this action from your replies. " +
-            "For these commands, say that robotOS will attempt the text after this voice turn finishes and show its actual status in Messages. " +
-            "Do not claim sent or delivered: only the device's Android callbacks establish those states. " +
-            "For missing recipient or message, ask for an explicit name or number and the full message."
+    fun instructions(): String = " You are a conversation-only response path. Your prose cannot execute device actions or send SMS. " +
+        "Never promise to send, claim you sent, or claim delivery. Native robotOS actions and their results are handled separately before this response path. " +
+        "If asked to send a text here, explain that no text was sent and ask for one recipient and the exact message."
 
     companion object {
         const val RECIPIENT = "dev.r1ptt.sms.recipient"

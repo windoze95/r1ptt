@@ -82,4 +82,5 @@ dependencies {
     // Real org.json for JVM tests (android.jar only ships stubs).
     testImplementation("org.json:json:20240303")
     testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

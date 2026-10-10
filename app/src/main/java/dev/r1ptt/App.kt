@@ -19,6 +19,7 @@ class App : Application() {
     val sms: SmsController get() = smsInstance.value
     val smsBusy: Boolean get() = smsInstance.isInitialized() && smsInstance.value.busy
     val smsAssistant by lazy { SmsAssistant(this) }
+    val outcomes by lazy { OutcomeStore(this) }
     lateinit var store: ConfigStore
         private set
     lateinit var history: History

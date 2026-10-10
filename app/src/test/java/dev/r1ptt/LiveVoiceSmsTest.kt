@@ -1,8 +1,8 @@
 package dev.r1ptt
 
 import dev.r1ptt.audio.PcmPlayer
-import dev.r1ptt.messages.SmsAssistant
-import dev.r1ptt.messages.SmsComposeAction
+import dev.r1ptt.data.Config as AppConfig
+import dev.r1ptt.messages.SmsStore
 import dev.r1ptt.net.LiveProtocol
 import org.junit.After
 import org.junit.Assert.*
@@ -23,162 +23,78 @@ class LiveVoiceSmsTest {
     private lateinit var app: App
     private lateinit var voice: LiveVoice
     private lateinit var tracker: LiveTracker
-    private val requests = mutableListOf<SmsAssistant.Request>()
     private val states = mutableListOf<TurnState>()
     private val failures = mutableListOf<String>()
-    private var settles = 0
     private val command = "Text +15551234567: Synthetic completed voice command"
 
     @Before fun setup() {
         app = RuntimeEnvironment.getApplication() as App
-        app.smsAssistant.enabled = true
-        voice = LiveVoice(app, publish = states::add, fail = failures::add, settled = { settles++ }, sendSms = {
-            // The handoff must follow the normal idle/settle boundary, not an active voice turn.
-            assertFalse(voice.busy)
-            assertEquals(Phase.IDLE, states.last().phase)
-            assertTrue(settles > 0)
-            requests.add(it)
-        })
+        app.deleteDatabase("messages.db")
+        voice = LiveVoice(app, publish = states::add, fail = failures::add, settled = {})
         tracker = field("tracker") as LiveTracker
     }
-
-    @After fun cleanup() {
-        voice.reset()
-        (field("player") as PcmPlayer).release()
-    }
-
+    @After fun cleanup() { voice.reset(); (field("player") as PcmPlayer).release() }
     private fun field(name: String): Any? = LiveVoice::class.java.getDeclaredField(name).apply { isAccessible = true }.get(voice)
-
-    private fun tick() {
-        LiveVoice::class.java.getDeclaredMethod("tick").apply { isAccessible = true }.invoke(voice)
-    }
-
+    private fun tick() { LiveVoice::class.java.getDeclaredMethod("tick").apply { isAccessible = true }.invoke(voice) }
     private fun event(event: LiveProtocol.Event) {
-        LiveVoice::class.java.getDeclaredMethod("handle", LiveProtocol.Event::class.java)
-            .apply { isAccessible = true }.invoke(voice, event)
+        LiveVoice::class.java.getDeclaredMethod("handle", LiveProtocol.Event::class.java).apply { isAccessible = true }.invoke(voice, event)
     }
-
-    /** Inject accepted transcript events without starting a microphone, player or network session. */
-    private fun begin(heard: String, said: String = "I will attempt the text after this turn.") {
+    /** Synthetic accepted events; no microphone, network, player or native SMS transport. */
+    private fun begin(heard: String, said: String = "Synthetic response") {
         LiveVoice::class.java.getDeclaredField("active").apply { isAccessible = true }.setBoolean(voice, true)
-        tracker.hold()
-        event(LiveProtocol.Event.Heard(heard))
-        event(LiveProtocol.Event.Said(said))
-        assertNull(field("session"))
-        assertFalse(voice.capturing)
+        LiveVoice::class.java.getDeclaredField("outcomeId").apply { isAccessible = true }.set(voice, app.outcomes.begin(OutcomeSource.LIVE_VOICE))
+        tracker.hold(); event(LiveProtocol.Event.Heard(heard)); event(LiveProtocol.Event.Said(said))
+        assertNull(field("session")); assertFalse(voice.capturing)
     }
-
-    /** Model already-played speech in the tracker; no PCM reaches an AudioTrack. */
-    private fun releaseAndReply() {
-        tracker.release()
-        tracker.audio(speech = true)
-    }
-
+    private fun reply() { tracker.release(); tracker.audio(speech = true) }
     private fun advance(ms: Long) { ShadowSystemClock.advanceBy(Duration.ofMillis(ms)) }
+    private fun noSms() { SmsStore(app).use { assertTrue(it.threads().isEmpty()) } }
 
-    @Test fun recognizedUserCommandDispatchesOnceOnlyAfterTheCompletedTurnSettles() {
-        begin(command)
-        tick()
-        assertEquals(Phase.LISTENING, states.last().phase)
-        assertTrue(requests.isEmpty())
-
-        tracker.release()
-        tick()
-        assertEquals(Phase.THINKING, states.last().phase)
-        assertTrue(requests.isEmpty())
-
-        tracker.audio(speech = true)
-        advance(1199)
-        tick()
-        assertEquals(Phase.SPEAKING, states.last().phase)
-        assertTrue(requests.isEmpty())
-
-        advance(1)
-        tick()
-        assertEquals(1, requests.size)
-        assertEquals(SmsComposeAction("+15551234567", "Synthetic completed voice command"), requests.single().action)
-        assertTrue(app.history.messages.isEmpty())
-        assertTrue(failures.isEmpty())
-        assertNull(field("session"))
-
-        tick()
-        advance(2000)
-        tick()
-        assertEquals(1, requests.size)
-        assertEquals(1, settles)
+    @Test fun enabledAssistantUsesCompletedTranscriptionOnEveryProvider() {
+        for (provider in listOf("openai", "hermes", "custom")) {
+            val c = AppConfig().let { it.copy(activeProvider = provider, providers = it.providers +
+                (provider to it.providers.getValue(provider).copy(apiKey = "synthetic-key"))) }
+            assertFalse(TurnController.useLiveVoice(c, assistantSms = true))
+            assertEquals(provider == "openai", TurnController.useLiveVoice(c, assistantSms = false))
+        }
     }
 
-    @Test fun pendingBackendWorkPreventsQuietAudioFromCompletingAnSmsCommand() {
-        begin(command)
-        releaseAndReply()
-        event(LiveProtocol.Event.DelegationStarted)
-        advance(2000)
-        tick()
-        assertTrue(voice.busy)
-        assertTrue(requests.isEmpty())
-
-        event(LiveProtocol.Event.Backend("response.completed"))
-        tick()
-        assertEquals(1, requests.size)
-        assertFalse(voice.busy)
+    @Test fun liveCompletionIsNeverAnSmsExecutionBridge() {
+        begin(command); reply(); advance(1200); tick(); tick()
+        noSms(); assertFalse(voice.busy); assertTrue(failures.isEmpty())
+        assertEquals(OutcomeStatus.COMPLETED, app.outcomes.list().single().status)
     }
 
-    @Test fun interruptionDiscardsAnOtherwiseRecognizedUserCommand() {
-        begin(command)
-        releaseAndReply()
-        assertTrue(voice.interrupt())
-        advance(2000)
-        tick()
-        assertTrue(requests.isEmpty())
-        assertFalse(voice.busy)
-        assertTrue(app.history.messages.isEmpty())
-        assertTrue(failures.isEmpty())
+    @Test fun pendingBackendWorkStillPreventsQuietAudioCompletion() {
+        begin("Ordinary question"); reply(); event(LiveProtocol.Event.DelegationStarted)
+        advance(2000); tick(); assertTrue(voice.busy)
+        event(LiveProtocol.Event.Backend("response.completed")); tick()
+        assertFalse(voice.busy); noSms()
     }
 
-    @Test fun failedExchangeNeverDispatchesItsRecognizedUserCommand() {
-        begin(command)
-        releaseAndReply()
-        LiveVoice::class.java.getDeclaredMethod("failExchange", String::class.java)
-            .apply { isAccessible = true }.invoke(voice, "Synthetic connection failure")
-        advance(2000)
-        tick()
-        assertEquals(listOf("Synthetic connection failure"), failures)
-        assertTrue(requests.isEmpty())
-        assertFalse(voice.busy)
-        assertTrue(app.history.messages.isEmpty())
+    @Test fun interruptionRecordsCancellationWithoutDispatch() {
+        begin(command); reply(); assertTrue(voice.interrupt()); advance(2000); tick()
+        noSms(); assertFalse(voice.busy); assertTrue(failures.isEmpty())
+        assertEquals(OutcomeStatus.CANCELLED, app.outcomes.list().single().status)
     }
 
-    @Test fun noReplyTimeoutIsFailureEvenWhenTheTrackerOtherwiseReachesIdle() {
-        begin(command)
-        tracker.release()
-        advance(20_000)
-        tick()
+    @Test fun failedExchangeRetainsOnlyTheFailureCategory() {
+        begin(command); reply()
+        LiveVoice::class.java.getDeclaredMethod("failExchange", String::class.java).apply { isAccessible = true }
+            .invoke(voice, "Synthetic connection failure")
+        noSms(); assertFalse(voice.busy); assertTrue(app.history.messages.isEmpty())
+        assertEquals(OutcomeStatus.FAILED, app.outcomes.list().single().status)
+        assertEquals(OutcomeReason.NETWORK, app.outcomes.list().single().reason)
+    }
+
+    @Test fun noReplyTimeoutCannotBeRecordedAsSuccess() {
+        begin(command); tracker.release(); advance(20_000); tick()
         assertEquals(listOf("No reply; please try again"), failures)
-        assertTrue(requests.isEmpty())
-        assertFalse(voice.busy)
-        advance(2000)
-        tick()
-        assertTrue(requests.isEmpty())
+        noSms(); assertEquals(OutcomeStatus.FAILED, app.outcomes.list().single().status)
     }
 
-    @Test fun assistantOutputCannotAuthorizeASendWithoutAUserCommand() {
-        begin("Explain how texting works", said = command)
-        releaseAndReply()
-        advance(1200)
-        tick()
-        assertTrue(requests.isEmpty())
-        assertTrue(failures.isEmpty())
-        assertFalse(voice.busy)
-        assertEquals(listOf("Explain how texting works", command), app.history.messages.map { it.text })
-    }
-
-    @Test fun incompleteUserTranscriptCannotDispatchEvenAfterNormalCompletion() {
-        begin("Text +15551234567:")
-        releaseAndReply()
-        advance(1200)
-        tick()
-        assertTrue(requests.isEmpty())
-        assertTrue(failures.isEmpty())
-        assertFalse(voice.busy)
+    @Test fun assistantOutputCannotAuthorizeASend() {
+        begin("Explain how texting works", said = command); reply(); advance(1200); tick()
+        noSms(); assertEquals(listOf("Explain how texting works", command), app.history.messages.map { it.text })
     }
 }

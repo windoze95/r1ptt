@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="outcomes_back">Back</string>
+    <string name="outcomes_description">Recent assistant outcomes\nLast 50 actions, up to 3 days. Categories only; no message content.</string>
     <string name="sms_role_unavailable">Android does not offer the SMS role on this device.</string>
     <string name="messages">Messages</string>
     <string name="sms_missing_recipient">No saved number for %1$s. Enter the exact phone number before review.</string>

@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Looper
 import dev.r1ptt.App
+import dev.r1ptt.OutcomeStatus
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -198,6 +199,7 @@ class SmsAssistantTest {
         execute("Text +15551234567: Synthetic native status test")
         assertEquals(listOf("Sending…"), reports)
         assertEquals(SmsStatus.SENDING, attempt().status(System.currentTimeMillis()))
+        assertEquals(OutcomeStatus.HANDOFF, app.outcomes.list().single().status)
         fun result(part: Int, delivery: Boolean = false) {
             val record = transport.records.single()
             val done = CountDownLatch(1)
@@ -207,12 +209,30 @@ class SmsAssistantTest {
         }
         result(0)
         assertEquals(SmsStatus.SENDING, attempt().status(System.currentTimeMillis()))
+        assertEquals(OutcomeStatus.HANDOFF, app.outcomes.list().single().status)
         result(1)
         assertEquals(SmsStatus.SENT, attempt().status(System.currentTimeMillis()))
+        assertEquals(OutcomeStatus.SMS_SENT, app.outcomes.list().single().status)
         result(0, delivery = true) // An OK callback without a carrier PDU is not proof of delivery.
         result(1, delivery = true)
         assertEquals(SmsStatus.SENT, attempt().status(System.currentTimeMillis()))
         assertEquals(1, transport.records.size)
+        assertEquals(OutcomeStatus.SMS_SENT, app.outcomes.list().single().status)
+    }
+
+    @Test fun nativeRadioFailureBecomesRetainedFailureWithoutRetry() {
+        execute("Text +15551234567: Synthetic radio failure test")
+        val record = transport.records.single()
+        for (part in record.parts.indices) {
+            val done = CountDownLatch(1)
+            controller.result(Intent().setData(Uri.parse(SmsCallback(record.id, record.token, part, false).uri())),
+                android.telephony.SmsManager.RESULT_ERROR_RADIO_OFF) { done.countDown() }
+            assertTrue(done.await(5, TimeUnit.SECONDS))
+        }
+        assertEquals(OutcomeStatus.SMS_FAILED, app.outcomes.list().single().status)
+        assertEquals(android.telephony.SmsManager.RESULT_ERROR_RADIO_OFF, app.outcomes.list().single().code)
+        assertEquals(1, transport.records.size)
+        assertEquals(SmsStatus.FAILED, attempt().status(System.currentTimeMillis()))
     }
 
     @Test fun priorDraftOptInDoesNotEnableDirectSending() {
