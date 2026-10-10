@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="sms_role_unavailable">Android does not offer the SMS role on this device.</string>
     <string name="messages">Messages</string>
     <string name="sms_missing_recipient">No saved number for %1$s. Enter the exact phone number before review.</string>
     <string name="sms_draft_save_failed">Draft could not be saved. Keep this screen open and check storage.</string>

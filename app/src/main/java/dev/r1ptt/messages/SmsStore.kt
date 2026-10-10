@@ -7,16 +7,24 @@ import android.database.sqlite.SQLiteOpenHelper
 import android.database.sqlite.SQLiteConstraintException
 
 /** App-private SMS data, separate from AI History. SQLite transactions commit before any send. */
-class SmsStore(context: Context) : SQLiteOpenHelper(context, "messages.db", null, 1) {
+class SmsStore(context: Context) : SQLiteOpenHelper(context, "messages.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE messages (id TEXT PRIMARY KEY, peer TEXT NOT NULL, created INTEGER NOT NULL, unread INTEGER NOT NULL, record TEXT NOT NULL)")
         db.execSQL("CREATE INDEX messages_peer ON messages(peer, created)")
         db.execSQL("CREATE TABLE draft (id INTEGER PRIMARY KEY CHECK (id = 1), peer TEXT NOT NULL, body TEXT NOT NULL)")
         db.execSQL("CREATE TABLE recipients (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, number TEXT NOT NULL)")
+        createRoleTables(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        error("Unsupported Messages database version") // never erase messages to recover a schema error
+        check(oldVersion == 1 && newVersion == 2) { "Unsupported Messages database version" }
+        createRoleTables(db) // Additive migration: the original failed attempt and its callbacks stay intact.
+    }
+
+    private fun createRoleTables(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE provider_links (id TEXT PRIMARY KEY, uri TEXT, dirty INTEGER NOT NULL DEFAULT 1)")
+        db.execSQL("CREATE TABLE mms_notices (id TEXT PRIMARY KEY, created INTEGER NOT NULL, subscription INTEGER NOT NULL, headers BLOB, data BLOB NOT NULL)")
+        db.execSQL("CREATE TABLE reply_requests (id TEXT PRIMARY KEY, peer TEXT NOT NULL, body TEXT NOT NULL)")
     }
 
     fun draft(): SmsDraft = readableDatabase.rawQuery("SELECT peer, body FROM draft WHERE id=1", null).use { c ->
@@ -29,17 +37,47 @@ class SmsStore(context: Context) : SQLiteOpenHelper(context, "messages.db", null
         }, SQLiteDatabase.CONFLICT_REPLACE).also { check(it >= 0) { "Draft was not saved" } }
     }
 
-    fun insert(record: SmsRecord): Boolean = try {
-        writableDatabase.insertOrThrow("messages", null, ContentValues().apply {
-            put("id", record.id); put("peer", record.peer); put("created", record.createdAt)
-            put("unread", if (record.incoming) 1 else 0); put("record", record.encode())
-        })
-        true
-    } catch (e: SQLiteConstraintException) {
-        val duplicate = readableDatabase.rawQuery("SELECT id FROM messages WHERE id=?", arrayOf(record.id)).use { it.moveToFirst() }
-        if (!duplicate) throw e
-        false
+    fun insert(record: SmsRecord): Boolean {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.insertOrThrow("messages", null, ContentValues().apply {
+                put("id", record.id); put("peer", record.peer); put("created", record.createdAt)
+                put("unread", if (record.incoming) 1 else 0); put("record", record.encode())
+            })
+            if (record.systemOwned) db.insertWithOnConflict("provider_links", null, ContentValues().apply { put("id", record.id) }, SQLiteDatabase.CONFLICT_IGNORE)
+            db.setTransactionSuccessful()
+            return true
+        } catch (e: SQLiteConstraintException) {
+            val duplicate = readableDatabase.rawQuery("SELECT id FROM messages WHERE id=?", arrayOf(record.id)).use { it.moveToFirst() }
+            if (!duplicate) throw e
+            return false
+        } finally { db.endTransaction() }
     }
+
+    fun record(id: String): SmsRecord? = readableDatabase.rawQuery("SELECT record FROM messages WHERE id=?", arrayOf(id)).use {
+        if (it.moveToFirst()) SmsRecord.decode(it.getString(0)) else null
+    }
+    fun providerUri(id: String): String? = readableDatabase.rawQuery("SELECT uri FROM provider_links WHERE id=?", arrayOf(id)).use {
+        if (it.moveToFirst() && !it.isNull(0)) it.getString(0) else null
+    }
+    fun linked(id: String, uri: String) { writableDatabase.update("provider_links", ContentValues().apply { put("uri", uri) }, "id=?", arrayOf(id)) }
+    fun systemCopySaved(id: String) { writableDatabase.update("provider_links", ContentValues().apply { put("dirty", 0) }, "id=?", arrayOf(id)) }
+    fun pendingSystemCopies(): List<SmsRecord> = readableDatabase.rawQuery(
+        "SELECT record FROM messages JOIN provider_links USING(id) WHERE dirty=1 LIMIT 20", null,
+    ).use { c -> buildList { while (c.moveToNext()) add(SmsRecord.decode(c.getString(0))) } }
+    fun saveMmsNotice(id: String, sub: Int, headers: ByteArray?, data: ByteArray): Boolean {
+        require(data.size in 1..262144 && (headers?.size ?: 0) <= 65536)
+        return writableDatabase.insertWithOnConflict("mms_notices", null, ContentValues().apply {
+            put("id", id); put("created", System.currentTimeMillis()); put("subscription", sub); put("headers", headers); put("data", data)
+        }, SQLiteDatabase.CONFLICT_IGNORE) != -1L
+    }
+    fun mmsNoticeCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM mms_notices", null).use { it.moveToFirst(); it.getInt(0) }
+    fun replyRequests(): List<Pair<String, SmsDraft>> = readableDatabase.rawQuery("SELECT id,peer,body FROM reply_requests ORDER BY rowid LIMIT 20", null).use { c ->
+        buildList { while (c.moveToNext()) add(c.getString(0) to SmsDraft(c.getString(1), c.getString(2))) }
+    }
+    fun addReplyRequest(id: String, draft: SmsDraft) { writableDatabase.insertOrThrow("reply_requests", null, ContentValues().apply { put("id", id); put("peer", draft.peer); put("body", draft.body) }) }
+    fun removeReplyRequest(id: String) { writableDatabase.delete("reply_requests", "id=?", arrayOf(id)) }
 
     fun outgoing(record: SmsRecord, draft: SmsDraft) {
         val db = writableDatabase
@@ -61,7 +99,10 @@ class SmsStore(context: Context) : SQLiteOpenHelper(context, "messages.db", null
             } ?: return false
             if (!callback.accepts(old)) return false
             val next = change(old)
-            if (next != old) db.update("messages", ContentValues().apply { put("record", next.encode()) }, "id=?", arrayOf(old.id))
+            if (next != old) {
+                db.update("messages", ContentValues().apply { put("record", next.encode()) }, "id=?", arrayOf(old.id))
+                if (old.systemOwned) db.update("provider_links", ContentValues().apply { put("dirty", 1) }, "id=?", arrayOf(old.id))
+            }
             db.setTransactionSuccessful()
             return next != old
         } finally { db.endTransaction() }
