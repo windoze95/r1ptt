@@ -130,28 +130,22 @@ class SmsAssistantTest {
         assertNull(shadowOf(app).nextStartedActivity)
     }
 
-    @Test fun unknownNameOpensClarificationWithoutSending() {
+    @Test fun unknownNameAsksForARecipientWithoutSendingOrLeavingHome() {
         execute("Text Unknown Person that Synthetic clarification body")
         noSend()
-        assertEquals(listOf("Recipient needs clarification in Messages. No text was sent."), reports)
-        val opened = shadowOf(app).nextStartedActivity
-        assertEquals("Unknown Person", opened.getStringExtra(SmsAssistant.RECIPIENT))
-        assertEquals("Synthetic clarification body", opened.getStringExtra(SmsAssistant.BODY))
-        assertFalse(opened.hasExtra(SmsAssistant.THREAD))
+        assertEquals(listOf("Use a full phone number or save an exact recipient name in Messages, then repeat the request. No text was sent."), reports)
+        assertNull(shadowOf(app).nextStartedActivity)
     }
 
-    @Test fun duplicateNameWithDifferentNumbersOpensClarificationWithoutSending() {
+    @Test fun duplicateNameWithDifferentNumbersAsksForAnExactNumberWithoutLeavingHome() {
         SmsStore(app).use {
             it.addRecipient("Synthetic Person", "+15551234567")
             it.addRecipient("Synthetic Person", "+15557654321")
         }
         execute("Text Synthetic Person that Synthetic ambiguous body")
         noSend()
-        val opened = shadowOf(app).nextStartedActivity
-        assertEquals("Synthetic Person", opened.getStringExtra(SmsAssistant.RECIPIENT))
-        assertEquals("Synthetic ambiguous body", opened.getStringExtra(SmsAssistant.BODY))
-        assertFalse(opened.hasExtra(SmsAssistant.THREAD))
-        assertTrue(reports.single().contains("clarification"))
+        assertNull(shadowOf(app).nextStartedActivity)
+        assertTrue(reports.single().contains("full phone number"))
     }
 
     @Test fun disablingAssistantBeforeRecipientCallbackPreventsDispatch() {

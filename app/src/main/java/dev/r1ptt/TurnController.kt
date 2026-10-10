@@ -185,7 +185,7 @@ class TurnController(
         destination = CapturedInput(target?.takeIf { it.isActive() })
         dictating = destination.target != null
         dictationBlockedPress = (destination.target == null && privateInputScreen) || destination.target?.canDictate() == false
-        if (dictationBlockedPress) return
+        if (dictationBlockedPress) { settle(); return }
         transcriptionConfig = cfg // a mid-press settings change cannot redirect private audio
         // Keyboard closed → speech-to-speech (if available); keyboard open → dictation via transcription.
         liveTurn = !dictating && useLiveVoice(cfg, assistant.enabled)
@@ -597,7 +597,17 @@ class TurnController(
 
     private fun sendSms(request: SmsAssistant.Request) {
         val generation = pressGeneration
-        assistant.execute(request, current = { generation == pressGeneration && !busy }, report = ::note)
+        assistant.execute(request, current = { generation == pressGeneration && !busy }, report = { message ->
+            if (generation == pressGeneration) {
+                // Dispatch must finish with the original turn idle; only then speak its outcome.
+                // Reuse its outcome ID so feedback cannot create or replay an SMS request.
+                stopActive()
+                app.screen.holdAwake()
+                launch(emitStart = false, source = OutcomeSource.SMS, outcomeId = request.outcomeId) { turn ->
+                    replyLocally(turn, message)
+                }
+            }
+        })
     }
 
     private fun idle() {

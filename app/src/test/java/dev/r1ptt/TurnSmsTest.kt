@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Looper
+import android.os.PowerManager
 import dev.r1ptt.data.Config as AppConfig
 import dev.r1ptt.data.Msg
 import dev.r1ptt.messages.*
@@ -23,6 +24,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Robolectric
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
@@ -45,6 +47,8 @@ class TurnSmsTest {
     private lateinit var sms: SmsController
     private lateinit var assistant: SmsAssistant
     private val records = CopyOnWriteArrayList<SmsRecord>()
+    private var transportFailure: Exception? = null
+    private var transportCalls = 0
     private val interpreted = CopyOnWriteArrayList<String>()
     private val text = "Could you send Sam a message saying Meet at six."
     private val action = SmsIntent.Send(SmsComposeAction("Sam", "Meet at six."))
@@ -65,6 +69,8 @@ class TurnSmsTest {
             override fun divide(body: String, subscription: Int) = listOf(body)
             override fun send(record: SmsRecord, texts: List<String>, sent: ArrayList<PendingIntent>, delivery: ArrayList<PendingIntent>) {
                 assertFalse(turns.busy)
+                transportCalls++
+                transportFailure?.let { throw it }
                 records.add(record)
             }
         }) { true }
@@ -105,14 +111,14 @@ class TurnSmsTest {
             .invoke(turns, 1L, false, OutcomeSource.VOICE, null, block)
     }
 
-    @Test fun naturalTypedRequestDispatchesOnceWithoutReviewOrProseHistory() {
+    @Test fun naturalTypedRequestDispatchesOnceWithoutReviewOrSmsContentInChatHistory() {
         turns.sendText(text)
         await { records.size == 1 && app.outcomes.list().single().status == OutcomeStatus.HANDOFF }
         drain()
         assertEquals(listOf(text), interpreted)
         assertEquals("+15551234567", records.single().peer)
         assertEquals("Meet at six.", records.single().body)
-        assertTrue(app.history.messages.isEmpty())
+        assertEquals(listOf("Sending…"), app.history.messages.map { it.text })
         assertEquals(OutcomeSource.TYPED, app.outcomes.list().single().source)
         assertEquals(MessagesActivity::class.java.name, shadowOf(app).nextStartedActivity.component?.className)
     }
@@ -126,7 +132,7 @@ class TurnSmsTest {
             assertEquals(OutcomeSource.VOICE, app.outcomes.list().last().source)
         }
         assertEquals(listOf(text, text, text), interpreted)
-        assertTrue(app.history.messages.isEmpty())
+        assertEquals(listOf("Sending…", "Sending…", "Sending…"), app.history.messages.map { it.text })
     }
 
     @Test fun clarificationRemainsReadableAfterTheStatusNoticeClearsWithoutRetainingTheRequest() {
@@ -209,10 +215,11 @@ class TurnSmsTest {
             assertEquals(app.history.messages.single().text, JSONObject(speech.body.readUtf8()).getString("input"))
             assertGenericReply(); assertTrue(records.isEmpty())
             assertEquals(OutcomeReason.REQUEST, app.outcomes.list().single().reason)
+            server.enqueue(MockResponse().setBody(""))
             resolver = { _, _, _ -> action }
             completedVoice(text)
-            await { records.size == 1 }
-            drain(); assertEquals(1, server.requestCount)
+            await { records.size == 1 && !turns.busy }
+            drain(); assertEquals(2, server.requestCount)
         }
     }
 
@@ -226,9 +233,10 @@ class TurnSmsTest {
             assertGenericReply(); assertTrue(records.isEmpty())
             assertEquals(OutcomeStatus.CLARIFY, app.outcomes.list().single().status)
             assertFalse(app.history.messages.toString().contains("private speech"))
+            server.enqueue(MockResponse().setBody(""))
             resolver = { _, _, _ -> action }
             completedVoice(text)
-            await { records.size == 1 }
+            await { records.size == 1 && !turns.busy }
         }
     }
 
@@ -251,5 +259,86 @@ class TurnSmsTest {
         await { app.outcomes.list().single().status == OutcomeStatus.FAILED }
         assertEquals(OutcomeReason.UNAVAILABLE, app.outcomes.list().single().reason)
         drain(); assertTrue(records.isEmpty())
+    }
+
+    @Test fun unknownRecipientAfterRecognizedVoiceCommandGetsPersistentSpokenClarification() {
+        MockWebServer().use { server ->
+            server.start(); speechEndpoint(server)
+            server.enqueue(MockResponse().setBody(""))
+            completedVoice("Text Unlisted: Meet at six.")
+            await { server.requestCount == 1 && !turns.busy }
+            assertGenericReply()
+            assertTrue(app.history.messages.single().text.contains("full phone number"))
+            assertFalse(app.history.messages.single().text.contains("Unlisted"))
+            assertFalse(app.history.messages.single().text.contains("Meet at six."))
+            assertEquals(app.history.messages.single().text, JSONObject(server.takeRequest().body.readUtf8()).getString("input"))
+            assertEquals(OutcomeReason.RECIPIENT, app.outcomes.list().single().reason)
+            assertEquals(OutcomeStatus.CLARIFY, app.outcomes.list().single().status)
+            assertEquals(0, transportCalls)
+            assertNull(shadowOf(app).nextStartedActivity)
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(4))
+            assertGenericReply()
+        }
+    }
+
+    @Test fun localSendRejectionIsSpokenWithoutClaimingOrAttemptingDispatch() {
+        MockWebServer().use { server ->
+            server.start(); speechEndpoint(server)
+            server.enqueue(MockResponse().setBody(""))
+            shadowOf(app).denyPermissions(Manifest.permission.SEND_SMS)
+            completedVoice(text)
+            await { server.requestCount == 1 && !turns.busy }
+            assertGenericReply()
+            assertTrue(app.history.messages.single().text.contains("Enable SMS sending first"))
+            assertEquals(OutcomeStatus.FAILED, app.outcomes.list().single().status)
+            assertEquals(0, transportCalls)
+        }
+    }
+
+    @Test fun uncertainTransportOutcomeIsSpokenOnceAndNeverRetried() {
+        MockWebServer().use { server ->
+            server.start(); speechEndpoint(server)
+            server.enqueue(MockResponse().setBody(""))
+            transportFailure = java.io.IOException("synthetic private transport detail")
+            completedVoice(text)
+            await { server.requestCount == 1 && !turns.busy }
+            assertEquals(1, transportCalls)
+            assertEquals(OutcomeStatus.SMS_UNKNOWN, app.outcomes.list().single().status)
+            assertEquals("Send status is uncertain. Check with the recipient before trying again.", app.history.messages.single().text)
+            assertEquals(app.history.messages.single().text, JSONObject(server.takeRequest().body.readUtf8()).getString("input"))
+            drain(); assertEquals(1, transportCalls)
+        }
+    }
+
+    @Test fun cancellingRecipientFeedbackReleasesTheTurnWithoutStartingAnSms() {
+        MockWebServer().use { server ->
+            server.start(); speechEndpoint(server)
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+            completedVoice("Text Unlisted: Meet at six.")
+            await { server.requestCount == 1 && turns.state.value.phase == Phase.SPEAKING }
+            turns.onDoubleTap()
+            await { !turns.busy }
+            drain(); assertEquals(0, transportCalls)
+            assertEquals(OutcomeStatus.CLARIFY, app.outcomes.list().single().status)
+        }
+    }
+
+    @Test fun pressOnPrivateMessagesScreenStopsFeedbackAndReleasesTheWakeLock() {
+        MockWebServer().use { server ->
+            server.start(); speechEndpoint(server)
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+            completedVoice(text)
+            await { records.size == 1 && server.requestCount == 1 && turns.state.value.phase == Phase.SPEAKING }
+            val activity = Robolectric.buildActivity(MessagesActivity::class.java, shadowOf(app).nextStartedActivity).setup()
+            val wake = app.screen.javaClass.getDeclaredField("wakeLock").apply { isAccessible = true }.get(app.screen) as PowerManager.WakeLock
+            assertTrue(wake.isHeld)
+            assertFalse(activity.get().canDictate())
+            turns.onPress(1000); turns.onShortRelease(); turns.onTap()
+            await { !turns.busy }
+            assertFalse(wake.isHeld)
+            drain(); assertEquals(1, transportCalls)
+            assertEquals(OutcomeStatus.HANDOFF, app.outcomes.list().single().status)
+            activity.pause().stop().destroy()
+        }
     }
 }

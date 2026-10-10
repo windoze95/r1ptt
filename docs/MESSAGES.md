@@ -62,16 +62,19 @@ SMS sending is enabled, Home voice turns use completed transcription → intent 
 or ordinary chat/TTS. This applies to OpenAI, Hermes, and custom chat providers. GPT-Live remains
 available when assistant sending is off. Interrupted or failed turns do not send. A command
 is consumed once; a new press or turn invalidates a pending recipient lookup. Missing or ambiguous
-recipients open a clarification draft instead of sending. Complete that draft manually or issue a
-new command with the exact number. Assistant sends preserve any existing manual draft.
+recipients leave a clarification on Home instead of switching into a private draft. Repeat the
+complete request with an exact number, or save the recipient in Messages first. Assistant requests
+preserve any existing manual draft.
 Completed recognized commands are not copied into AI chat history. Provider speech is not evidence
 of SMS dispatch: Messages opens the stored attempt and displays Android's actual send and delivery
 status. Model replies, incoming texts, compose intents, and restored activities cannot trigger an
 assistant send.
 
-Unclear requests and interpretation failures leave a generic explanation in the Home conversation
-and speak it when voice replies and the network are available. The intercepted request, recipient,
-and body are not added to chat history. Ordinary chat instructions such as “Reply in one sentence”
+Unclear requests, interpretation failures, local recipient problems, and send outcomes leave a generic
+explanation in the Home conversation and speak it when voice replies and the network are available.
+Speech starts after the executor reports its result; it never submits or retries a text. A new press
+cancels old feedback. The intercepted request, recipient, and body are not added to chat history.
+Ordinary chat instructions such as “Reply in one sentence”
 remain chat even though they contain words also used for messaging.
 
 The outcome journal distinguishes request resolution, clarification, cancellation, API/network
