@@ -59,8 +59,12 @@ explicit controls in Messages → Options. No SMS permission is requested merely
 role. MMS is explicitly unsupported; incoming MMS notices are retained locally and shown as warnings.
 Message details exposes native failure codes without retrying a failed or uncertain attempt.
 With assistant sending enabled, voice uses completed transcription and the selected chat provider
-to resolve requests before replying. Options → **Recent assistant outcomes** retains brief result
-categories, including failures; it contains no message text or recipient numbers.
+to resolve requests before replying. Unclear or unsupported requests leave a readable reply on Home
+and speak it when voice replies and the network are available. Only the generic explanation is kept
+in the conversation; the intercepted SMS request stays out of chat history.
+Options → **Recent assistant outcomes** distinguishes missing request details from unresolved saved
+recipients and retains brief result categories, including failures; it contains no message text or
+recipient numbers.
 MMS, RCS, old inbox import, and live carrier acceptance are not included. See [docs/MESSAGES.md](docs/MESSAGES.md).
 
 ## Battery

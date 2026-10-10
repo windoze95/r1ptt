@@ -18,7 +18,6 @@ sealed interface SmsIntent {
         // The model extracts meaning; this outer boundary excludes quoted/informational input.
         private val directed = Regex("^(?:(?:hey[,!]?|please|can you|could you|would you mind|would you|will you|i need (?:you )?to|i want (?:you )?to|i(?:'d|’d| would) like (?:you )?to|i was wondering if you could)\\s+)*(?:send(?:ing)?|text(?:ing)?|sms|messag(?:e|ing)|tell(?:ing)?|let|reply|respond|shoot|drop)\\b", RegexOption.IGNORE_CASE)
         fun directed(text: String) = directed.containsMatchIn(text.trim())
-        fun mentionsMessaging(text: String) = Regex("\\b(?:sms|text(?:s|ing|ed)?|messag(?:e|es|ing)|send|reply|recipient)\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)
 
         fun decode(raw: String, user: String): SmsIntent {
             require(raw.length <= 4096)
@@ -28,8 +27,9 @@ sealed interface SmsIntent {
             return when (j.getString("kind")) {
                 "chat" -> {
                     require(j.length() == 1)
-                    // An unsupported SMS instruction must not fall through to a prose promise.
-                    if (directed(user) && mentionsMessaging(user)) Clarify else Chat
+                    // Words such as "reply" and "text" also occur in ordinary chat instructions.
+                    // A chat classification cannot authorize the native SMS executor.
+                    Chat
                 }
                 "clarify" -> { require(j.length() == 1); Clarify }
                 "sms" -> {

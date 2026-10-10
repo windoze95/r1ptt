@@ -69,8 +69,15 @@ of SMS dispatch: Messages opens the stored attempt and displays Android's actual
 status. Model replies, incoming texts, compose intents, and restored activities cannot trigger an
 assistant send.
 
+Unclear requests and interpretation failures leave a generic explanation in the Home conversation
+and speak it when voice replies and the network are available. The intercepted request, recipient,
+and body are not added to chat history. Ordinary chat instructions such as “Reply in one sentence”
+remain chat even though they contain words also used for messaging.
+
 The outcome journal distinguishes request resolution, clarification, cancellation, API/network
-failure, Android handoff, and native sent/delivery results. A completed AI turn never means a text
+failure, Android handoff, and native sent/delivery results. New clarification entries distinguish
+missing or unsupported request details (`REQUEST`) from local recipient lookup (`RECIPIENT`).
+Older clarification entries cannot distinguish these causes. A completed AI turn never means a text
 was sent. A handoff with no result after two minutes displays unknown and must not be retried
 automatically. Native status callbacks remain authoritative; success requires sent callbacks for
 every SMS part, and delivery requires a carrier report.

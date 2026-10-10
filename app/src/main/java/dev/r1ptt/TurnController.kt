@@ -20,6 +20,7 @@ import dev.r1ptt.net.SttClient
 import dev.r1ptt.net.TtsClient
 import dev.r1ptt.net.friendly
 import dev.r1ptt.messages.SmsAssistant
+import dev.r1ptt.messages.SmsComposeAction
 import dev.r1ptt.messages.SmsIntent
 import dev.r1ptt.messages.SmsIntentClient
 import kotlinx.coroutines.CancellationException
@@ -471,7 +472,7 @@ class TurnController(
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 app.outcomes.update(turn.outcome, OutcomeStatus.FAILED, OutcomeStore.reason(e), (e as? dev.r1ptt.net.ApiError)?.code)
-                note("Couldn't interpret the request. No text was sent. Try ‘Text NUMBER: MESSAGE’.")
+                replyLocally(turn, "Couldn't interpret the request. No text was sent. Try ‘Text NUMBER: MESSAGE’.")
                 return
             }
             when (decision) {
@@ -481,15 +482,15 @@ class TurnController(
                     return
                 }
                 SmsIntent.Clarify -> {
-                    app.outcomes.update(turn.outcome, OutcomeStatus.CLARIFY, OutcomeReason.RECIPIENT)
-                    note("Include one recipient and the exact message. No text was sent.")
+                    app.outcomes.update(turn.outcome, OutcomeStatus.CLARIFY, OutcomeReason.REQUEST)
+                    replyLocally(turn, "Include one recipient and the exact message. No text was sent.")
                     return
                 }
                 SmsIntent.Chat -> {}
             }
-        } else if (SmsIntent.directed(text) && SmsIntent.mentionsMessaging(text)) {
+        } else if (SmsComposeAction.parse(text) != null) {
             app.outcomes.update(turn.outcome, OutcomeStatus.DISABLED)
-            note("Assistant SMS sending is off. Enable it in Messages → Options. No text was sent.")
+            replyLocally(turn, "Assistant SMS sending is off. Enable it in Messages → Options. No text was sent.")
             return
         }
         app.history.add(Msg.USER, text)
@@ -528,6 +529,25 @@ class TurnController(
             return
         }
         splitter.flush().forEach { speaker.say(SpeechText.clean(it)) }
+        finishSpeech(turn, speaker)
+    }
+
+    /** Retain only the generic explanation, never the intercepted SMS text or recipient. */
+    private suspend fun replyLocally(turn: Turn, message: String) {
+        app.history.add(Msg.ASSISTANT, message)
+        turn.replySaved = true
+        val cfg = app.store.value
+        // A network failure must still leave a readable explanation without another network wait.
+        if (!cfg.tts.enabled || !app.radio.isOnline()) {
+            note(message)
+            return
+        }
+        val speaker = Speaker(tts::call, cfg.tts.sampleRate).also { turn.speaker = it; it.start() }
+        speaker.say(SpeechText.clean(message))
+        finishSpeech(turn, speaker)
+    }
+
+    private suspend fun finishSpeech(turn: Turn, speaker: Speaker) {
         _state.update { it.copy(phase = Phase.SPEAKING, reply = "") }
         val error = suspendCancellableCoroutine<String?> { cont -> speaker.finish { e -> cont.resume(e) } }
         turn.speaker = null

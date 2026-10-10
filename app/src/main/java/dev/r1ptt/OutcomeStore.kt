@@ -9,7 +9,7 @@ import java.util.UUID
 
 enum class OutcomeSource { TYPED, VOICE, LIVE_VOICE, SMS }
 enum class OutcomeStatus { RESOLVING, CLARIFY, DISABLED, CANCELLED, FAILED, COMPLETED, HANDOFF, SMS_UNKNOWN, SMS_FAILED, SMS_PARTLY_SENT, SMS_SENT, SMS_DELIVERY_FAILED, SMS_DELIVERED }
-enum class OutcomeReason { NONE, AUTHORIZATION, NETWORK, TIMEOUT, PROVIDER, INVALID_ACTION, RECIPIENT, UNAVAILABLE }
+enum class OutcomeReason { NONE, AUTHORIZATION, NETWORK, TIMEOUT, PROVIDER, INVALID_ACTION, REQUEST, RECIPIENT, UNAVAILABLE }
 data class Outcome(val id: String, val at: Long, val source: OutcomeSource, val status: OutcomeStatus, val reason: OutcomeReason, val code: Int? = null)
 
 /** At most 50 local outcomes for 3 days. Enum categories and numeric codes only; no content fields. */

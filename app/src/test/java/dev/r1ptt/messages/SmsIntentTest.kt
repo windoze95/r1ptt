@@ -34,12 +34,17 @@ class SmsIntentTest {
         )) assertThrows(request, Exception::class.java) { SmsIntent.decode(action(), request) }
     }
 
-    @Test fun missingContextAndUnsupportedActionsCannotFallThroughToAProsePromise() {
-        for (request in listOf("Send that to her", "Please send Sam a text tomorrow", "Text two people")) {
-            assertEquals(SmsIntent.Clarify, SmsIntent.decode("""{"kind":"chat"}""", request))
+    @Test fun chatClassificationsAreNotOverriddenByMessagingVocabulary() {
+        for (request in listOf("Reply in one sentence.", "Tell me how SMS works.",
+            "Please respond with plain text.", "Send me five tips for sleeping.", "Send that to her")) {
+            assertEquals(request, SmsIntent.Chat, SmsIntent.decode("""{"kind":"chat"}""", request))
         }
-        assertEquals(SmsIntent.Clarify, SmsIntent.decode("""{"kind":"clarify"}""", "Send Sam a text"))
-        assertEquals(SmsIntent.Chat, SmsIntent.decode("""{"kind":"chat"}""", "Explain how text messaging works"))
+    }
+
+    @Test fun missingContextAndUnsupportedActionsRemainClarifications() {
+        for (request in listOf("Send that to her", "Please send Sam a text tomorrow", "Text two people", "Send Sam a text")) {
+            assertEquals(SmsIntent.Clarify, SmsIntent.decode("""{"kind":"clarify"}""", request))
+        }
     }
 
     @Test fun proseMultipleObjectsExtraFieldsAndUnboundedBodiesAreRejected() {

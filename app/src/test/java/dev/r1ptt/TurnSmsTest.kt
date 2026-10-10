@@ -7,10 +7,16 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Looper
 import dev.r1ptt.data.Config as AppConfig
+import dev.r1ptt.data.Msg
 import dev.r1ptt.messages.*
 import dev.r1ptt.net.ApiError
 import dev.r1ptt.net.CallRegistry
 import kotlinx.coroutines.flow.MutableStateFlow
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -25,6 +31,7 @@ import org.robolectric.shadows.ShadowSubscriptionManager
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.time.Duration
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -65,6 +72,7 @@ class TurnSmsTest {
         turns = TurnController(app, assistant) { cfg, input, calls -> resolver(cfg, input, calls) }
         App::class.java.getDeclaredField("turns").apply { isAccessible = true }.set(app, turns)
         SmsStore(app).use { it.addRecipient("Sam", "+15551234567") }
+        configure { it.copy(tts = it.tts.copy(enabled = false)) }
     }
     @After fun cleanup() { turns.shutdown() }
     private fun await(condition: () -> Boolean) {
@@ -73,9 +81,18 @@ class TurnSmsTest {
         assertTrue("Turn condition did not arrive", condition())
     }
     private fun drain() { repeat(2) { var done = false; sms.recipients { _, _ -> done = true }; await { done } } }
-    @Suppress("UNCHECKED_CAST") private fun provider(id: String) {
+    @Suppress("UNCHECKED_CAST") private fun configure(update: (AppConfig) -> AppConfig) {
         val state = app.store.javaClass.getDeclaredField("state").apply { isAccessible = true }.get(app.store) as MutableStateFlow<AppConfig>
-        state.value = state.value.copy(activeProvider = id, tts = state.value.tts.copy(enabled = false))
+        state.value = update(state.value)
+    }
+    private fun provider(id: String) = configure { it.copy(activeProvider = id) }
+    private fun speechEndpoint(server: MockWebServer) = configure {
+        it.copy(tts = it.tts.copy(enabled = true, endpoint = it.tts.endpoint.copy(baseUrl = server.url("/v1").toString())))
+    }
+    private fun assertGenericReply() {
+        assertEquals(Msg.ASSISTANT, app.history.messages.single().role)
+        assertTrue(app.history.messages.single().text.contains("No text was sent"))
+        assertFalse(app.history.messages.single().text.contains(text))
     }
     /** Enter at the completed STT boundary; no microphone or real provider is used. */
     private fun completedVoice(input: String) {
@@ -112,23 +129,29 @@ class TurnSmsTest {
         assertTrue(app.history.messages.isEmpty())
     }
 
-    @Test fun ambiguousIntentNeverDispatchesOrStartsAProseChat() {
+    @Test fun clarificationRemainsReadableAfterTheStatusNoticeClearsWithoutRetainingTheRequest() {
         resolver = { _, _, _ -> SmsIntent.Clarify }
         turns.sendText("Send that to her")
-        await { app.outcomes.list().single().status == OutcomeStatus.CLARIFY }
-        drain(); assertTrue(records.isEmpty()); assertTrue(app.history.messages.isEmpty())
+        await { app.outcomes.list().single().status == OutcomeStatus.CLARIFY && !turns.busy }
+        drain(); assertTrue(records.isEmpty()); assertGenericReply()
+        assertEquals(OutcomeReason.REQUEST, app.outcomes.list().single().reason)
+        assertFalse(app.history.messages.single().text.contains("Send that to her"))
         assertTrue(turns.state.value.note.contains("No text was sent"))
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(4))
+        assertEquals("", turns.state.value.note)
+        assertGenericReply()
     }
 
     @Test fun providerFailureIsRetainedWithoutItsRawMessageOrFalsePromise() {
         resolver = { _, _, _ -> throw ApiError(401, "synthetic private provider detail") }
         turns.sendText(text)
-        await { app.outcomes.list().single().status == OutcomeStatus.FAILED }
+        await { app.outcomes.list().single().status == OutcomeStatus.FAILED && !turns.busy }
         assertEquals(OutcomeReason.AUTHORIZATION, app.outcomes.list().single().reason)
         assertEquals(401, app.outcomes.list().single().code)
         assertTrue(turns.state.value.note.contains("No text was sent"))
         assertFalse(app.getSharedPreferences("action_outcomes", 0).all.toString().contains("private provider"))
-        drain(); assertTrue(records.isEmpty()); assertTrue(app.history.messages.isEmpty())
+        drain(); assertTrue(records.isEmpty()); assertGenericReply()
+        assertFalse(app.history.messages.toString().contains("private provider"))
     }
 
     @Test fun cancellationWhileInterpretingCannotDispatchALateDecision() {
@@ -141,12 +164,85 @@ class TurnSmsTest {
         drain(); assertTrue(records.isEmpty()); assertTrue(app.history.messages.isEmpty())
     }
 
-    @Test fun disabledAssistantRejectsNaturalSendBeforeAnyProviderRequest() {
+    @Test fun disabledAssistantExplainsLiteralSendWithoutAnyProviderRequest() {
         assistant.enabled = false
-        turns.sendText(text)
+        turns.sendText("Text Sam: Meet at six.")
         await { app.outcomes.list().single().status == OutcomeStatus.DISABLED }
         assertTrue(interpreted.isEmpty()); drain(); assertTrue(records.isEmpty())
-        assertTrue(app.history.messages.isEmpty())
+        assertGenericReply()
+    }
+
+    @Test fun ordinaryInstructionsReachChatWithAssistantSendingEnabledOrDisabled() {
+        MockWebServer().use { server ->
+            server.start()
+            configure { it.copy(providers = it.providers + ("openai" to it.provider.copy(baseUrl = server.url("/v1").toString()))) }
+            resolver = { _, input, _ -> SmsIntent.decode("""{"kind":"chat"}""", input) }
+            for (enabled in listOf(true, false)) {
+                assistant.enabled = enabled
+                app.history.newConversation()
+                val reply = "Here is one sentence."
+                server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(JSONObject()
+                    .put("choices", JSONArray().put(JSONObject().put("message", JSONObject().put("content", reply))
+                        .put("finish_reason", "stop"))).toString()))
+                turns.sendText("Reply in one sentence.")
+                await { app.history.messages.lastOrNull()?.text == reply && !turns.busy }
+                val request = JSONObject(server.takeRequest(2, TimeUnit.SECONDS)!!.body.readUtf8())
+                assertEquals("Reply in one sentence.", request.getJSONArray("messages").getJSONObject(1).getString("content"))
+                assertTrue(request.getJSONArray("messages").getJSONObject(0).getString("content")
+                    .contains(if (enabled) "sending is enabled" else "sending is disabled"))
+                assertEquals(OutcomeStatus.COMPLETED, app.outcomes.list().last().status)
+            }
+            drain(); assertTrue(records.isEmpty())
+            assertEquals(2, server.requestCount)
+        }
+    }
+
+    @Test fun completedVoiceClarificationUsesSpeechAndTheNextTurnStillWorks() {
+        MockWebServer().use { server ->
+            server.start(); speechEndpoint(server)
+            server.enqueue(MockResponse().setBody(""))
+            resolver = { _, _, _ -> SmsIntent.Clarify }
+            completedVoice(text)
+            await { server.requestCount == 1 && !turns.busy }
+            val speech = server.takeRequest(2, TimeUnit.SECONDS)!!
+            assertEquals("/v1/audio/speech", speech.path)
+            assertEquals(app.history.messages.single().text, JSONObject(speech.body.readUtf8()).getString("input"))
+            assertGenericReply(); assertTrue(records.isEmpty())
+            assertEquals(OutcomeReason.REQUEST, app.outcomes.list().single().reason)
+            resolver = { _, _, _ -> action }
+            completedVoice(text)
+            await { records.size == 1 }
+            drain(); assertEquals(1, server.requestCount)
+        }
+    }
+
+    @Test fun failedClarificationSpeechLeavesTheExplanationVisibleAndDoesNotBlockTheNextTurn() {
+        MockWebServer().use { server ->
+            server.start(); speechEndpoint(server)
+            server.enqueue(MockResponse().setResponseCode(401).setBody("synthetic private speech error"))
+            resolver = { _, _, _ -> SmsIntent.Clarify }
+            completedVoice(text)
+            await { server.requestCount == 1 && !turns.busy }
+            assertGenericReply(); assertTrue(records.isEmpty())
+            assertEquals(OutcomeStatus.CLARIFY, app.outcomes.list().single().status)
+            assertFalse(app.history.messages.toString().contains("private speech"))
+            resolver = { _, _, _ -> action }
+            completedVoice(text)
+            await { records.size == 1 }
+        }
+    }
+
+    @Test fun cancellingClarificationSpeechCannotSendOrLeaveTheTurnBusy() {
+        MockWebServer().use { server ->
+            server.start(); speechEndpoint(server)
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+            resolver = { _, _, _ -> SmsIntent.Clarify }
+            completedVoice(text)
+            await { server.requestCount == 1 && turns.state.value.phase == Phase.SPEAKING }
+            turns.onDoubleTap()
+            await { !turns.busy }
+            drain(); assertTrue(records.isEmpty()); assertTrue(app.history.messages.isEmpty())
+        }
     }
 
     @Test fun unavailableSmsPermissionCannotBecomeASuccessfulAssistantOutcome() {
