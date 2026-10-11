@@ -1,8 +1,10 @@
 # Messages
 
-The optional [Hermes SMS relay](RELAY.md) preserves the native SMS executor and
-adds durable owner commands, unsent drafts, and selected-message explanations.
-It starts disabled; enabling it and docked availability are separate controls.
+With the **Hermes Agent** provider, robotOS does not interpret texting requests itself: Hermes
+sends texts through its `robotos` tools, and your own texts to the R1 go to Hermes. See
+[HERMES.md](HERMES.md). The on-device assistant below applies to the other providers.
+
+The earlier [Hermes SMS relay](RELAY.md) is retired.
 
 Messages is a personal SMS handler inside the existing robotOS APK. It uses Android’s SMS
 service and your SIM. You can choose robotOS as the default SMS app through Android’s role
@@ -41,7 +43,11 @@ Messages → **Options** has separate opt-ins:
   and “Send a text to +15551234567”. It writes a short, natural message from your intent, adding a
   greeting or paraphrasing as appropriate. With no topic, it writes a brief neutral greeting.
   Say “Text Sam exactly: MESSAGE” or “Text Sam word for word: MESSAGE” to preserve the entire
-  supplied message verbatim. Completed requests send directly without a review step when the
+  supplied message verbatim. Numbers may be spoken digit by digit or in groups (“four oh five,
+  five five five…”); the AI copies them as said and robotOS converts and checks the digits locally,
+  adding +1 on a US SIM. Leading words such as “Okay,” “Hey robot,” or “Try again.” are fine, and
+  “my mom” matches a saved “Mom”. When a request can't be carried out, the reply says why: the
+  recipient didn't match what you said, it wasn't a direct request, or the exact wording was unclear. Completed requests send directly without a review step when the
   recipient is an exact number or a unique saved name. Android SMS access, a default SMS SIM,
   and the cellular setting are still required. The
   old draft-only opt-in does not enable direct sending; enable this option once. Voice uses the

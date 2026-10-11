@@ -409,7 +409,7 @@ class MessagesActivity : Activity(), DictationTarget {
             if (SmsRole.held(this)) "robotOS is the default SMS app" else "Make robotOS the default SMS app",
             "SMS diagnostics",
             "Recent assistant outcomes",
-            "SMS relay",
+            "Hermes",
         )
         showDialog(AlertDialog.Builder(this).setTitle("Messages options").setItems(options) { _, which ->
             when (which) {
@@ -422,7 +422,7 @@ class MessagesActivity : Activity(), DictationTarget {
                 6 -> defaultSmsInfo()
                 7 -> details(null)
                 8 -> startActivity(Intent(this, dev.r1ptt.OutcomesActivity::class.java))
-                9 -> startActivity(Intent(this, dev.r1ptt.bridge.BridgeActivity::class.java))
+                9 -> startActivity(Intent(this, dev.r1ptt.hermes.HermesActivity::class.java))
             }
         })
     }
