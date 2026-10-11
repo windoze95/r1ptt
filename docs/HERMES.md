@@ -15,6 +15,11 @@ the agent; the R1 only relays and acts:
   arrive and Hermes can reach the R1 at any time. On battery the normal three-minute cut applies, and
   the R1 is reachable only while awake. Power never switches the passthrough on or off.
 
+**Settings → Hermes** on the R1 (also Messages → Options → Hermes) shows whether Hermes can reach the
+R1, when it last did, how many texts it sent today and what happened to your last text. It turns
+Hermes's access and the passthrough on or off and sets your number and the daily text limit. The
+device token and Hermes's address are provisioned from a computer (below).
+
 ```
  PTT ──► R1: transcribe ──► https://HOST.TAILNET.ts.net/v1/chat/completions ──► Hermes
                                    (Tailscale Serve → 127.0.0.1:8642)                       │

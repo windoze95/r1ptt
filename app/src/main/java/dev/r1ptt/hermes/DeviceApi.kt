@@ -56,6 +56,7 @@ class DeviceApi(
     /** When Hermes last reached the R1 (for the settings screen). */
     @Volatile var lastCall = 0L
         private set
+    val listening: Boolean get() = server?.isClosed == false
 
     /** Follows the config: serve while enabled and valid, otherwise close the port. */
     @Synchronized fun apply(link: HermesLink) {
@@ -228,7 +229,7 @@ class DeviceApi(
         .put("status", r.status(clock()).name.lowercase())
         .put("error_codes", JSONArray(r.parts.mapNotNull { it.error }))
 
-    private fun sentToday(): Int = if (prefs.getLong("day", -1) == LocalDate.now().toEpochDay()) prefs.getInt("count", 0) else 0
+    fun sentToday(): Int = if (prefs.getLong("day", -1) == LocalDate.now().toEpochDay()) prefs.getInt("count", 0) else 0
     private fun countSend() = prefs.edit().putLong("day", LocalDate.now().toEpochDay()).putInt("count", sentToday() + 1).apply()
 
     private fun respond(socket: Socket, code: Int, body: JSONObject) {
