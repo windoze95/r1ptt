@@ -28,11 +28,14 @@ sealed interface SmsResolution {
 }
 
 object SmsRecipientResolver {
-    private fun key(name: String) = name.trim().replace(Regex("\\s+"), " ").lowercase(Locale.ROOT)
-    fun resolve(request: String, saved: List<SmsRecipient>): SmsResolution {
-        SmsAddress.normalize(request)?.let { return SmsResolution.Number(it) }
-        val matches = saved.filter { key(it.name) == key(request) && SmsAddress.normalize(it.number) == it.number }
+    private fun key(name: String) = name.trim().trimEnd('.', ',', '!', '?').replace(Regex("\\s+"), " ").lowercase(Locale.ROOT)
+    /** [region] is the SMS SIM's country; it only decides whether a ten-digit number is a +1 number. */
+    fun resolve(request: String, saved: List<SmsRecipient>, region: String? = null): SmsResolution {
+        SmsRecipientText.number(request, region)?.let { return SmsResolution.Number(it) }
+        fun named(name: String) = saved.filter { key(it.name) == key(name) && SmsAddress.normalize(it.number) == it.number }
             .distinctBy { it.number }
+        // "Text my mom" names the saved "Mom"; an exact saved "My Mom" still wins.
+        val matches = named(request).ifEmpty { Regex("^\\s*my\\s+(.+)$", RegexOption.IGNORE_CASE).find(request)?.let { named(it.groupValues[1]) }.orEmpty() }
         return when (matches.size) {
             0 -> SmsResolution.Missing
             1 -> SmsResolution.Number(matches.single().number)

@@ -14,6 +14,11 @@ talk; on release, it either sends what you said or types it into the text field:
 The backends are ChatGPT (an OpenAI API key, the default), **Hermes Agent**, or any
 other OpenAI-compatible server.
 
+With **Hermes Agent**, the R1 is a remote for your agent: every push-to-talk turn goes to Hermes as
+said, Hermes texts people through the R1 with its `robotos` MCP tools, and texts from your own number
+to the R1 go to Hermes, which texts back. Plugged in, the radios stay up so it is always reachable.
+See [docs/HERMES.md](docs/HERMES.md).
+
 robotOS was previously called R1 PTT. Its repository is
 [windoze95/robotOS](https://github.com/windoze95/robotOS). The Android package (`dev.r1ptt`),
 Magisk module ID (`r1ptt_system`), and existing configuration and build filenames retain their

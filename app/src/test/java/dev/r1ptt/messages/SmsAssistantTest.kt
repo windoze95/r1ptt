@@ -133,7 +133,7 @@ class SmsAssistantTest {
     @Test fun unknownNameAsksForARecipientWithoutSendingOrLeavingHome() {
         execute("Text Unknown Person that Synthetic clarification body")
         noSend()
-        assertEquals(listOf("Use a full phone number or save an exact recipient name in Messages, then repeat the request. No text was sent."), reports)
+        assertEquals(listOf("I don't have a saved number for that name. Say the full phone number, or save the name under Messages → Options → Saved recipients. No text was sent."), reports)
         assertNull(shadowOf(app).nextStartedActivity)
     }
 

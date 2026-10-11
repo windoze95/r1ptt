@@ -153,16 +153,42 @@ class TurnSmsTest {
         assertEquals(MessagesActivity::class.java.name, shadowOf(app).nextStartedActivity.component?.className)
     }
 
-    @Test fun completedVoiceRequestsUseTheSameExecutorForEveryChatProvider() {
-        for ((index, id) in listOf("openai", "hermes", "custom").withIndex()) {
+    @Test fun completedVoiceRequestsUseTheSameExecutorForEveryNonAgentProvider() {
+        for ((index, id) in listOf("openai", "custom").withIndex()) {
             provider(id)
             completedVoice(text)
             await { records.size == index + 1 && app.outcomes.list().last().status == OutcomeStatus.HANDOFF }
             drain()
             assertEquals(OutcomeSource.VOICE, app.outcomes.list().last().source)
         }
-        assertEquals(listOf(text, text, text), interpreted)
-        assertEquals(listOf("Sending…", "Sending…", "Sending…"), app.history.messages.map { it.text })
+        assertEquals(listOf(text, text), interpreted)
+        assertEquals(listOf("Sending…", "Sending…"), app.history.messages.map { it.text })
+    }
+
+    @Test fun withHermesAsTheAgentEveryTurnGoesToHermesUnchangedAndTheR1NeverInterprets() {
+        MockWebServer().use { server ->
+            server.start()
+            configure { it.copy(activeProvider = "hermes", providers = it.providers +
+                ("hermes" to it.providers.getValue("hermes").copy(baseUrl = server.url("/v1").toString(), apiKey = "k".repeat(40)))) }
+            val reply = "Texted Sam."
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(JSONObject()
+                .put("choices", JSONArray().put(JSONObject().put("message", JSONObject().put("content", reply))
+                    .put("finish_reason", "stop"))).toString()))
+            completedVoice(text)
+            await { app.history.messages.lastOrNull()?.text == reply && !turns.busy }
+            val request = server.takeRequest(2, TimeUnit.SECONDS)!!
+            assertEquals("/v1/chat/completions", request.path)
+            assertEquals("r1ptt-${app.history.convId}", request.getHeader("X-Hermes-Session-Id"))
+            val messages = JSONObject(request.body.readUtf8()).getJSONArray("messages")
+            assertEquals(text, messages.getJSONObject(messages.length() - 1).getString("content"))
+            val system = messages.getJSONObject(0).getString("content")
+            assertTrue(system.contains("robotos tools"))
+            assertFalse(system.contains("does not itself execute device actions"))
+            assertTrue(interpreted.isEmpty())
+            drain(); assertTrue(records.isEmpty())
+            assertEquals(listOf(text, reply), app.history.messages.map { it.text })
+            assertEquals(OutcomeStatus.COMPLETED, app.outcomes.list().single().status)
+        }
     }
 
     @Test fun bodylessCompletedVoiceRequestUsesRealIntentClientToComposeAndDispatchOnce() {

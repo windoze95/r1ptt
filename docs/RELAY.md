@@ -1,5 +1,8 @@
 # Hermes SMS relay
 
+> **Retired.** robotOS now uses Hermes as the agent directly: see [HERMES.md](HERMES.md). The relay's
+> services are stopped and disabled on the Hermes host; this page describes the old design.
+
 The relay is optional and starts disabled. **Messages → Options → SMS relay** and
 **Settings → SMS relay** open its controls. Until enabled, existing PTT SMS commands
 continue through the current assistant. The relay uses the same SIM, native SMS

@@ -33,6 +33,12 @@ class BridgeController(private val app: App) {
     @Volatile private var calls = CallRegistry()
     @Volatile var allowed = false
         private set
+    /** An owner command is still being prepared; the relay service polls quickly until it settles. */
+    @Volatile var activeOwner = false
+        private set
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    /** What to tell the owner when a command ends: set where the cause is known, spoken once. */
+    private val notes = java.util.concurrent.ConcurrentHashMap<String, String>()
     val lastContact: Long get() = prefs.getLong("contact", 0)
     val meteredBytes: Long get() = if (prefs.getLong("day", -1) == System.currentTimeMillis() / 86_400_000) prefs.getLong("bytes", 0) else 0
 
@@ -41,7 +47,7 @@ class BridgeController(private val app: App) {
         check(cfg.enabled && cfg.valid() && !cfg.paused) { "Resume SMS relay before sending a relay command." }
         check(app.smsAssistant.enabled && app.screen.isScreenOn() && !app.getSystemService(KeyguardManager::class.java).isKeyguardLocked) { "Unlock the R1 to issue an SMS command." }
         require(BridgePolicy.request(text) && text.length <= 6000)
-        require(!BridgePolicy.sensitive(text)) { "Security codes and credentials stay local. Use the native Messages editor." }
+        require(!BridgePolicy.sensitiveCommand(text)) { "Security codes and credentials stay local. Use the native Messages editor." }
         val mode = if (BridgePolicy.draftRequest(text)) "draft" else "send"
         val sub = SubscriptionManager.getDefaultSmsSubscriptionId()
         if (mode == "send") check(app.sms.canSend && app.store.value.power.cellular && SubscriptionManager.isValidSubscriptionId(sub)) { "Enable SMS access and select a SIM first." }
@@ -123,14 +129,20 @@ class BridgeController(private val app: App) {
                             _status.value = "Request held · open SMS relay"
                         } else throw error
                     } catch (error: CancellationException) { throw error }
-                    catch (_: IllegalArgumentException) { journal.update(job.id, "clarify"); _status.value = "Request needs clarification" }
+                    catch (error: IllegalArgumentException) {
+                        journal.update(job.id, "clarify"); _status.value = "Request needs clarification"
+                        notes.putIfAbsent(job.id, (error as? SmsIntentRejected)?.reason?.message ?: (error as? RelayClarify)?.message ?: CLARIFY)
+                    }
                     catch (_: IllegalStateException) { journal.update(job.id, "failed"); _status.value = "Request held · check SMS access, SIM and relay settings" }
                     finally { finishOutcome(job.id) }
                 }
+                val now = System.currentTimeMillis() / 1000
+                activeOwner = journal.jobs().any { it.outcome != null && it.state in setOf("queued", "running", "ready", "frozen") && it.expires > now }
                 journal.jobs().any { it.state !in BridgePolicy.terminal }
             } catch (error: CancellationException) { throw error }
             catch (_: Exception) {
                 _status.value = "Hermes connection unavailable · requests saved"
+                activeOwner = false
                 true
             }
         }
@@ -174,29 +186,33 @@ class BridgeController(private val app: App) {
                 if (value.optString("kind") != "draft") { journal.update(job.id, "clarify"); return }
                 check(value.length() == 3)
                 val recipient = value.getString("recipient")
-                check(recipient.isNotBlank() && original.getString("text").contains(recipient))
-                val resolved = SmsRecipientResolver.resolve(recipient, store.recipients()) as? SmsResolution.Number
-                check(resolved != null && !journal.blocked(resolved.number))
+                check(recipient.isNotBlank() && SmsRecipientText.mentions(original.getString("text"), recipient))
+                val resolved = SmsRecipientResolver.resolve(recipient, store.recipients(), SmsRecipientText.region(app)) as? SmsResolution.Number
+                    ?: throw RelayClarify(UNKNOWN_RECIPIENT)
+                check(!journal.blocked(resolved.number))
                 val body = value.getString("body")
                 require(body.isNotBlank() && body.length <= SmsRecord.MAX_DRAFT_CHARS)
                 // A separate reviewable draft cannot overwrite the owner's manual draft.
                 journal.draft(job.id, SmsDraft(resolved.number, body))
                 _status.value = "Draft ready in Messages · unsent"
+                notes.putIfAbsent(job.id, "Your draft is ready in Messages. Nothing was sent.")
                 return
             }
             when (val resultIntent = SmsIntent.decode(result, original.getString("text"))) {
                 is SmsIntent.Send -> {
-                    val resolved = SmsRecipientResolver.resolve(resultIntent.action.recipient, store.recipients()) as? SmsResolution.Number
-                    require(resolved != null && BridgePolicy.destination(resolved.number))
+                    val resolved = SmsRecipientResolver.resolve(resultIntent.action.recipient, store.recipients(), SmsRecipientText.region(app)) as? SmsResolution.Number
+                        ?: throw RelayClarify(UNKNOWN_RECIPIENT)
+                    if (!BridgePolicy.destination(resolved.number)) throw RelayClarify("The SMS relay only sends to US phone numbers. No text was sent.")
                     check(!journal.blocked(resolved.number))
                     check(original.getInt("sim") == SubscriptionManager.getDefaultSmsSubscriptionId())
-                    val review = app.sms.prepare(SmsDraft(resolved.number, resultIntent.action.body), job.outcome)
-                    require(review.texts.size <= 3)
+                    val review = try { app.sms.prepare(SmsDraft(resolved.number, resultIntent.action.body), job.outcome) }
+                    catch (e: IllegalStateException) { notes.putIfAbsent(job.id, "${e.message} No text was sent."); throw e }
+                    if (review.texts.size > 3) throw RelayClarify("That message is too long for the SMS relay. No text was sent.")
                     val frozen = frozen(review.record)
                     journal.freeze(job.id, review.record, BridgePolicy.digest(frozen))
                 }
-                SmsIntent.Clarify -> { journal.update(job.id, "clarify"); _status.value = "Use one exact saved name or full country-coded number"; return }
-                SmsIntent.Chat -> { journal.update(job.id, "chat"); _status.value = "No SMS send requested"; return }
+                SmsIntent.Clarify -> { journal.update(job.id, "clarify"); _status.value = "Use one exact saved name or full country-coded number"; notes.putIfAbsent(job.id, CLARIFY); return }
+                SmsIntent.Chat -> { journal.update(job.id, "chat"); _status.value = "No SMS send requested"; notes.putIfAbsent(job.id, "That didn't sound like a request to send a text. No text was sent."); return }
             }
             job = requireNotNull(journal.get(job.id))
         }
@@ -221,6 +237,7 @@ class BridgeController(private val app: App) {
                 app.sms.send(review, clearDraft = false) { consumed, message ->
                     leases.remove(job.id)
                     _status.value = message
+                    job.outcome?.let { app.turns.relayResult(it, message) }
                     if (consumed && app.screen.isScreenOn() && !app.getSystemService(KeyguardManager::class.java).isKeyguardLocked) runCatching {
                         app.startActivity(Intent(app, MessagesActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(SmsAssistant.THREAD, record.peer))
                     }
@@ -239,7 +256,15 @@ class BridgeController(private val app: App) {
             "expired", "failed", "unresolved", "revoked" -> OutcomeStatus.FAILED
             else -> return
         }
-        job.outcome?.let { app.outcomes.finishIfOpen(it, status) }
+        val note = notes.remove(id) ?: when (job.state) {
+            "clarify" -> CLARIFY
+            "expired" -> "The SMS relay didn't finish in time, so the request expired. No text was sent."
+            "failed", "unresolved", "revoked" -> "The SMS relay couldn't finish that request. No text was sent."
+            else -> null
+        }
+        val outcome = job.outcome ?: return
+        // Only the owner's own open command is reported, once; a cancelled one stays quiet.
+        if (app.outcomes.finishIfOpen(outcome, status) && note != null && status != OutcomeStatus.CANCELLED) main.post { app.turns.relayResult(outcome, note) }
     }
 
     private suspend fun request(cfg: BridgeConfig, path: String, body: JSONObject?, calls: CallRegistry): JSONObject {
@@ -254,7 +279,12 @@ class BridgeController(private val app: App) {
         }
     }
 
+    /** A relay result that needs the owner's input; its message is safe to show and speak. */
+    private class RelayClarify(message: String) : IllegalArgumentException(message)
+
     companion object {
+        private const val CLARIFY = "I need one clear recipient and a request to send now. No text was sent."
+        private const val UNKNOWN_RECIPIENT = "I don't have a saved number for that name. Say the full phone number, or save the name under Messages → Options → Saved recipients. No text was sent."
         fun selectedId(device: String, message: String): String = UUID.nameUUIDFromBytes("robotOS:selected:$device:$message".toByteArray(Charsets.UTF_8)).toString()
         fun frozen(record: SmsRecord) = JSONObject().put("recipient", record.peer).put("body", record.body)
             .put("sim", record.subscriptionId).put("parts", record.parts.size).put("attempt", record.id)

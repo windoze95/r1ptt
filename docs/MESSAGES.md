@@ -1,5 +1,9 @@
 # Messages
 
+With the **Hermes Agent** provider, robotOS does not interpret texting requests itself: Hermes
+sends texts through its `robotos` tools, and your own texts to the R1 go to Hermes. See
+[HERMES.md](HERMES.md). The on-device assistant below applies to the other providers.
+
 The optional [Hermes SMS relay](RELAY.md) preserves the native SMS executor and
 adds durable owner commands, unsent drafts, and selected-message explanations.
 It starts disabled; enabling it and docked availability are separate controls.

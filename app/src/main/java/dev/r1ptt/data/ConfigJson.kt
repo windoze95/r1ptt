@@ -46,6 +46,11 @@ object ConfigJson {
             put("wireguardUrl", c.bridge.wireguardUrl); put("useWireguard", c.bridge.useWireguard)
             put("wireguardAddress", c.bridge.wireguardAddress)
         })
+        put("hermes", JSONObject().apply {
+            put("deviceApi", c.hermes.deviceApi); put("token", c.hermes.token); put("port", c.hermes.port)
+            put("passthrough", c.hermes.passthrough); put("owner", c.hermes.owner)
+            put("smsSession", c.hermes.smsSession); put("dailySendLimit", c.hermes.dailySendLimit)
+        })
         put("earcons", c.earcons)
         put("textSizeSp", c.textSizeSp)
         put("saveClips", c.saveClips)
@@ -66,6 +71,7 @@ object ConfigJson {
         val live = j.optJSONObject("live")
         val power = j.optJSONObject("power")
         val bridge = j.optJSONObject("bridge")
+        val hermes = j.optJSONObject("hermes")
         return base.copy(
             activeProvider = j.str("activeProvider", base.activeProvider)
                 .takeUnless { it in Config.RETIRED_PROVIDER_IDS } ?: base.provider.id,
@@ -116,6 +122,13 @@ object ConfigJson {
                 wireguardUrl = b.str("wireguardUrl", base.bridge.wireguardUrl), useWireguard = b.bool("useWireguard", base.bridge.useWireguard),
                 wireguardAddress = b.str("wireguardAddress", base.bridge.wireguardAddress),
             ).also { require(!it.enabled || it.valid()) { "The relay needs a valid HTTPS device enrollment." } } } ?: base.bridge,
+            hermes = hermes?.let { h -> base.hermes.copy(
+                deviceApi = h.bool("deviceApi", base.hermes.deviceApi), token = h.str("token", base.hermes.token),
+                port = h.int("port", base.hermes.port), passthrough = h.bool("passthrough", base.hermes.passthrough),
+                owner = h.str("owner", base.hermes.owner).let { dev.r1ptt.messages.SmsAddress.normalize(it) ?: it },
+                smsSession = h.str("smsSession", base.hermes.smsSession),
+                dailySendLimit = h.int("dailySendLimit", base.hermes.dailySendLimit),
+            ).also { require(it.valid()) { "Hermes needs a 32+ character device token and the owner's full phone number." } } } ?: base.hermes,
             earcons = j.bool("earcons", base.earcons),
             textSizeSp = j.int("textSizeSp", base.textSizeSp),
             saveClips = j.bool("saveClips", base.saveClips),

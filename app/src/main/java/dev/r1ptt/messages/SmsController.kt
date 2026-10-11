@@ -74,6 +74,12 @@ class SmsController(
         try { db.saveDraft(draft) } catch (_: Exception) { main.post { failed() } }
     }
 
+    // Synchronous reads for the device API's own threads. SQLiteOpenHelper serializes access.
+    fun record(id: String): SmsRecord? = db.record(id)
+    fun conversation(peer: String): List<SmsRecord> = db.conversation(peer)
+    fun threads(): List<SmsThread> = db.threads()
+    fun savedRecipients(): List<SmsRecipient> = db.recipients()
+
     fun recipients(done: (List<SmsRecipient>?, String?) -> Unit) = worker.execute {
         try { val saved = db.recipients(); main.post { done(saved, null) } }
         catch (_: Exception) { main.post { done(null, "Saved recipients could not be opened.") } }
@@ -138,12 +144,15 @@ class SmsController(
         return SmsReview(draft, SmsRecord.outgoing(peer, body, sub, texts.size, System.currentTimeMillis()).copy(assistantOutcomeId = outcomeId), texts, label)
     }
 
-    /** Consumes one explicit attempt (review button or assistant command). Never automatically retries. */
-    fun send(review: SmsReview, clearDraft: Boolean = true, done: (Boolean, String) -> Unit) {
+    /**
+     * Consumes one explicit attempt (review button, assistant command, or Hermes through the device
+     * API). Never automatically retries. An [agent] send runs while a voice turn waits on Hermes.
+     */
+    fun send(review: SmsReview, clearDraft: Boolean = true, agent: Boolean = false, done: (Boolean, String) -> Unit) {
         if (review.bridgeCommand != null && !app.bridge.canDispatch(review.bridgeCommand)) {
             done(false, "Relay sending is paused or the command expired. Nothing was sent."); return
         }
-        if (dispatching || app.updates.installing || app.turns.busy) {
+        if (dispatching || app.updates.installing || (!agent && app.turns.busy)) {
             done(false, "Finish the current action before sending."); return
         }
         if (!canSend || !cellularEnabled() || SubscriptionManager.getDefaultSmsSubscriptionId() != review.record.subscriptionId) {
@@ -253,7 +262,8 @@ class SmsController(
             if (db.insert(record)) {
                 syncSystem(record)
                 changed()
-                notifyPrivate("New text in Messages")
+                // The owner's own texts go to Hermes, which answers by text; everyone else stays local.
+                if (!app.hermesTexts.received(record)) notifyPrivate("New text in Messages")
             }
         } catch (_: Exception) { notifyPrivate("An incoming text could not be saved. Check available storage.") }
         finally { finished() }

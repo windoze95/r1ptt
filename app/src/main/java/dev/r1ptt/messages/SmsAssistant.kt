@@ -1,6 +1,7 @@
 package dev.r1ptt.messages
 
 import android.content.Intent
+import android.util.Log
 import dev.r1ptt.App
 import dev.r1ptt.OutcomeSource
 import dev.r1ptt.OutcomeStatus
@@ -36,7 +37,10 @@ class SmsAssistant(private val app: App, private val sms: SmsController = app.sm
         sms.recipients { saved, error ->
             if (!enabled || !current()) { app.outcomes.finishIfOpen(request.outcomeId, OutcomeStatus.CANCELLED); return@recipients }
             if (saved == null) { rejected("${error ?: "Recipients unavailable."} No text was sent.", OutcomeReason.UNAVAILABLE); return@recipients }
-            when (val recipient = SmsRecipientResolver.resolve(action.recipient, saved)) {
+            val recipient = SmsRecipientResolver.resolve(action.recipient, saved, SmsRecipientText.region(app))
+            // Content-free: the resolution category only, never the name, number or body.
+            Log.i("r1ptt", "sms recipient: ${recipient.javaClass.simpleName}")
+            when (recipient) {
                 is SmsResolution.Number -> {
                     val prepared = try { sms.prepare(SmsDraft(recipient.number, action.body), request.outcomeId) }
                     catch (e: IllegalArgumentException) { rejected("${e.message} No text was sent.", OutcomeReason.INVALID_ACTION); return@recipients }
@@ -57,7 +61,8 @@ class SmsAssistant(private val app: App, private val sms: SmsController = app.sm
                 else -> {
                     app.outcomes.update(request.outcomeId, OutcomeStatus.CLARIFY, OutcomeReason.RECIPIENT)
                     // Keep Home in front so the explanation and the next voice request remain usable.
-                    report("Use a full phone number or save an exact recipient name in Messages, then repeat the request. No text was sent.")
+                    report(if (recipient is SmsResolution.Choose) "More than one saved number has that name. Say the full phone number instead. No text was sent."
+                        else "I don't have a saved number for that name. Say the full phone number, or save the name under Messages → Options → Saved recipients. No text was sent.")
                 }
             }
         }
